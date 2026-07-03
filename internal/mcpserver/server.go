@@ -10,7 +10,9 @@ import (
 
 const protocolVersion = "2025-06-18"
 
-type Server struct{}
+type Server struct {
+	initialized bool
+}
 
 type initializeResult struct {
 	ProtocolVersion string       `json:"protocolVersion"`
@@ -89,6 +91,8 @@ func (s *Server) Handle(_ context.Context, request protocol.Request) protocol.Re
 			return response
 		}
 		response.Result = mustMarshal(result)
+	case "notifications/initialized":
+		s.initialized = true
 	default:
 		response.Error = protocol.NewError(protocol.CodeMethodNotFound, "method not found")
 	}

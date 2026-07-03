@@ -80,3 +80,22 @@ func TestServe_NotificationDoesNotWriteResponse(t *testing.T) {
 		t.Fatalf("output = %q, want empty", output.String())
 	}
 }
+
+func TestServe_InitializedNotificationMarksServerInitialized(t *testing.T) {
+	server := New()
+
+	input := strings.NewReader(`{"jsonrpc":"2.0","method":"notifications/initialized"}` + "\n")
+	var output bytes.Buffer
+
+	err := server.Serve(context.Background(), input, &output)
+	if err != nil {
+		t.Fatalf("Serve() error = %v", err)
+	}
+
+	if !server.initialized {
+		t.Fatal("server.initialized = false, want true")
+	}
+	if output.Len() != 0 {
+		t.Fatalf("output = %q, want empty", output.String())
+	}
+}
