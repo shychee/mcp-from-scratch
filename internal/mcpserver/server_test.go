@@ -203,3 +203,69 @@ func TestServer_CallsRegisteredTool(t *testing.T) {
 		t.Fatalf("content text = %q, want reverse called", result.Content[0].Text)
 	}
 }
+
+func TestServer_CallToolRejectsMissingToolName(t *testing.T) {
+	t.Parallel()
+
+	server := New()
+	response := server.Handle(context.Background(), protocol.Request{
+		JSONRPC: "2.0",
+		ID:      protocol.ID(1),
+		Method:  "tools/call",
+		Params:  json.RawMessage(`{"arguments":{"text":"hello"}}`),
+	})
+
+	if response.Error == nil {
+		t.Fatal("Handle(tools/call) error = nil, want invalid params error")
+	}
+	if response.Error.Code != protocol.CodeInvalidParams {
+		t.Fatalf("error code = %d, want %d", response.Error.Code, protocol.CodeInvalidParams)
+	}
+	if response.Error.Message != "missing tool name" {
+		t.Fatalf("error message = %q, want missing tool name", response.Error.Message)
+	}
+}
+
+func TestServer_CallToolRejectsUnknownTool(t *testing.T) {
+	t.Parallel()
+
+	server := New()
+	response := server.Handle(context.Background(), protocol.Request{
+		JSONRPC: "2.0",
+		ID:      protocol.ID(1),
+		Method:  "tools/call",
+		Params:  json.RawMessage(`{"name":"missing","arguments":{}}`),
+	})
+
+	if response.Error == nil {
+		t.Fatal("Handle(tools/call) error = nil, want invalid params error")
+	}
+	if response.Error.Code != protocol.CodeInvalidParams {
+		t.Fatalf("error code = %d, want %d", response.Error.Code, protocol.CodeInvalidParams)
+	}
+	if response.Error.Message != `unknown tool "missing"` {
+		t.Fatalf("error message = %q, want unknown tool", response.Error.Message)
+	}
+}
+
+func TestServer_CallEchoRejectsMalformedArguments(t *testing.T) {
+	t.Parallel()
+
+	server := New()
+	response := server.Handle(context.Background(), protocol.Request{
+		JSONRPC: "2.0",
+		ID:      protocol.ID(1),
+		Method:  "tools/call",
+		Params:  json.RawMessage(`{"name":"echo","arguments":"not an object"}`),
+	})
+
+	if response.Error == nil {
+		t.Fatal("Handle(tools/call) error = nil, want invalid params error")
+	}
+	if response.Error.Code != protocol.CodeInvalidParams {
+		t.Fatalf("error code = %d, want %d", response.Error.Code, protocol.CodeInvalidParams)
+	}
+	if response.Error.Message != "decode echo arguments: json: cannot unmarshal string into Go value of type mcpserver.echoArguments" {
+		t.Fatalf("error message = %q, want decode echo arguments error", response.Error.Message)
+	}
+}

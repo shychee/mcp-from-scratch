@@ -154,6 +154,9 @@ func (s *Server) callTool(raw json.RawMessage) (toolCallResult, error) {
 	if err := json.Unmarshal(raw, &params); err != nil {
 		return toolCallResult{}, fmt.Errorf("decode tool call params: %w", err)
 	}
+	if params.Name == "" {
+		return toolCallResult{}, fmt.Errorf("missing tool name")
+	}
 
 	for _, registeredTool := range s.tools {
 		if registeredTool.Definition().Name == params.Name {
