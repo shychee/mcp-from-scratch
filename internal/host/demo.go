@@ -79,7 +79,7 @@ type rpcClient struct {
 func runProtocolDemo(client *rpcClient) (Transcript, error) {
 	initializeRequest := protocol.Request{
 		JSONRPC: "2.0",
-		ID:      1,
+		ID:      protocol.ID(1),
 		Method:  "initialize",
 		Params:  json.RawMessage(`{"protocolVersion":"2025-06-18"}`),
 	}
@@ -90,7 +90,7 @@ func runProtocolDemo(client *rpcClient) (Transcript, error) {
 
 	toolsListRequest := protocol.Request{
 		JSONRPC: "2.0",
-		ID:      2,
+		ID:      protocol.ID(2),
 		Method:  "tools/list",
 	}
 	toolsList, err := client.call(toolsListRequest)
@@ -100,7 +100,7 @@ func runProtocolDemo(client *rpcClient) (Transcript, error) {
 
 	echoCallRequest := protocol.Request{
 		JSONRPC: "2.0",
-		ID:      3,
+		ID:      protocol.ID(3),
 		Method:  "tools/call",
 		Params:  json.RawMessage(`{"name":"echo","arguments":{"text":"hello from host"}}`),
 	}

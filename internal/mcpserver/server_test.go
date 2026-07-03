@@ -14,7 +14,7 @@ func TestServer_InitializeReturnsServerInfo(t *testing.T) {
 	server := New()
 	response := server.Handle(context.Background(), protocol.Request{
 		JSONRPC: "2.0",
-		ID:      1,
+		ID:      protocol.ID(1),
 		Method:  "initialize",
 		Params:  json.RawMessage(`{"protocolVersion":"2025-06-18"}`),
 	})
@@ -40,7 +40,7 @@ func TestServer_ListsEchoTool(t *testing.T) {
 	server := New()
 	response := server.Handle(context.Background(), protocol.Request{
 		JSONRPC: "2.0",
-		ID:      2,
+		ID:      protocol.ID(2),
 		Method:  "tools/list",
 	})
 
@@ -68,7 +68,7 @@ func TestServer_CallsEchoTool(t *testing.T) {
 	server := New()
 	response := server.Handle(context.Background(), protocol.Request{
 		JSONRPC: "2.0",
-		ID:      3,
+		ID:      protocol.ID(3),
 		Method:  "tools/call",
 		Params:  json.RawMessage(`{"name":"echo","arguments":{"text":"hello mcp"}}`),
 	})
@@ -97,7 +97,7 @@ func TestServer_UnknownMethodReturnsJSONRPCError(t *testing.T) {
 	server := New()
 	response := server.Handle(context.Background(), protocol.Request{
 		JSONRPC: "2.0",
-		ID:      4,
+		ID:      protocol.ID(4),
 		Method:  "unknown/method",
 	})
 

@@ -10,6 +10,8 @@ import (
 	"github.com/shychee/mcp-from-scratch/internal/protocol"
 )
 
+// Serve owns stdio framing, JSON parsing, and JSON-RPC envelope validation.
+// Valid requests are passed to Handle for MCP method dispatch.
 func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) error {
 	scanner := bufio.NewScanner(input)
 	encoder := json.NewEncoder(output)
@@ -23,14 +25,24 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 		if err := json.Unmarshal(scanner.Bytes(), &request); err != nil {
 			response := protocol.Response{
 				JSONRPC: "2.0",
-				Error:   &protocol.Error{Code: -32700, Message: "parse error"},
+				Error:   protocol.NewError(protocol.CodeParseError, "parse error"),
 			}
 			if encodeErr := encoder.Encode(response); encodeErr != nil {
 				return fmt.Errorf("encode parse error response: %w", encodeErr)
 			}
 			continue
 		}
-
+		if requestError := protocol.ValidateRequest(request); requestError != nil {
+			response := protocol.Response{
+				JSONRPC: "2.0",
+				ID:      request.ID,
+				Error:   requestError,
+			}
+			if encodeErr := encoder.Encode(response); encodeErr != nil {
+				return fmt.Errorf("encode invalid request error response: %w", encodeErr)
+			}
+			continue
+		}
 		if err := encoder.Encode(s.Handle(ctx, request)); err != nil {
 			return fmt.Errorf("encode response: %w", err)
 		}

@@ -59,6 +59,7 @@ func New() *Server {
 	return &Server{}
 }
 
+// Handle dispatches valid JSON-RPC requests to the MCP method implementation.
 func (s *Server) Handle(_ context.Context, request protocol.Request) protocol.Response {
 	response := protocol.Response{
 		JSONRPC: "2.0",
@@ -84,12 +85,12 @@ func (s *Server) Handle(_ context.Context, request protocol.Request) protocol.Re
 	case "tools/call":
 		result, err := callTool(request.Params)
 		if err != nil {
-			response.Error = &protocol.Error{Code: -32602, Message: err.Error()}
+			response.Error = protocol.NewError(protocol.CodeInvalidParams, err.Error())
 			return response
 		}
 		response.Result = mustMarshal(result)
 	default:
-		response.Error = &protocol.Error{Code: -32601, Message: "method not found"}
+		response.Error = protocol.NewError(protocol.CodeMethodNotFound, "method not found")
 	}
 
 	return response
