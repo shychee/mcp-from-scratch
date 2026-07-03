@@ -10,8 +10,14 @@ import (
 
 const protocolVersion = "2025-06-18"
 
+type Tool interface {
+	Definition() tool
+	Call(json.RawMessage) (toolCallResult, error)
+}
+
 type Server struct {
 	initialized bool
+	tools       []Tool
 }
 
 type initializeResult struct {
@@ -57,8 +63,13 @@ type echoArguments struct {
 	Text string `json:"text"`
 }
 
-func New() *Server {
-	return &Server{}
+func New(tools ...Tool) *Server {
+	if len(tools) == 0 {
+		tools = []Tool{echoTool{}}
+	}
+	return &Server{
+		tools: tools,
+	}
 }
 
 // Handle dispatches valid JSON-RPC requests to the MCP method implementation.
@@ -81,11 +92,15 @@ func (s *Server) Handle(_ context.Context, request protocol.Request) protocol.Re
 			},
 		})
 	case "tools/list":
+		tools := make([]tool, 0, len(s.tools))
+		for _, t := range s.tools {
+			tools = append(tools, t.Definition())
+		}
 		response.Result = mustMarshal(toolsListResult{
-			Tools: []tool{echoTool()},
+			Tools: tools,
 		})
 	case "tools/call":
-		result, err := callTool(request.Params)
+		result, err := s.callTool(request.Params)
 		if err != nil {
 			response.Error = protocol.NewError(protocol.CodeInvalidParams, err.Error())
 			return response
@@ -100,7 +115,9 @@ func (s *Server) Handle(_ context.Context, request protocol.Request) protocol.Re
 	return response
 }
 
-func echoTool() tool {
+type echoTool struct{}
+
+func (echoTool) Definition() tool {
 	return tool{
 		Name:        "echo",
 		Description: "Return the text argument back to the caller.",
@@ -117,29 +134,34 @@ func echoTool() tool {
 	}
 }
 
-func callTool(raw json.RawMessage) (toolCallResult, error) {
+func (echoTool) Call(raw json.RawMessage) (toolCallResult, error) {
+	var args echoArguments
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return toolCallResult{}, fmt.Errorf("decode echo arguments: %w", err)
+	}
+	return toolCallResult{
+		Content: []contentBlock{
+			{
+				Type: "text",
+				Text: args.Text,
+			},
+		},
+	}, nil
+}
+
+func (s *Server) callTool(raw json.RawMessage) (toolCallResult, error) {
 	var params toolCallParams
 	if err := json.Unmarshal(raw, &params); err != nil {
 		return toolCallResult{}, fmt.Errorf("decode tool call params: %w", err)
 	}
 
-	switch params.Name {
-	case "echo":
-		var args echoArguments
-		if err := json.Unmarshal(params.Arguments, &args); err != nil {
-			return toolCallResult{}, fmt.Errorf("decode echo arguments: %w", err)
+	for _, registeredTool := range s.tools {
+		if registeredTool.Definition().Name == params.Name {
+			return registeredTool.Call(params.Arguments)
 		}
-		return toolCallResult{
-			Content: []contentBlock{
-				{
-					Type: "text",
-					Text: args.Text,
-				},
-			},
-		}, nil
-	default:
-		return toolCallResult{}, fmt.Errorf("unknown tool %q", params.Name)
 	}
+
+	return toolCallResult{}, fmt.Errorf("unknown tool %q", params.Name)
 }
 
 func mustMarshal(value any) json.RawMessage {

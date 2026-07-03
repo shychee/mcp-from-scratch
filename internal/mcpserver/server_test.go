@@ -119,3 +119,87 @@ func mustUnmarshalResult(t *testing.T, raw json.RawMessage, target any) {
 		t.Fatalf("unmarshal result: %v", err)
 	}
 }
+
+type fakeTool struct {
+	name        string
+	description string
+}
+
+func (t fakeTool) Definition() tool {
+	return tool{
+		Name:        t.name,
+		Description: t.description,
+		InputSchema: map[string]any{
+			"type": "object",
+		},
+	}
+}
+
+func (t fakeTool) Call(_ json.RawMessage) (toolCallResult, error) {
+	return toolCallResult{
+		Content: []contentBlock{
+			{
+				Type: "text",
+				Text: t.name + " called",
+			},
+		},
+	}, nil
+}
+
+func TestServer_ListsRegisteredTool(t *testing.T) {
+	t.Parallel()
+
+	server := New(fakeTool{
+		name:        "reverse",
+		description: "Reverse text.",
+	})
+
+	response := server.Handle(context.Background(), protocol.Request{
+		JSONRPC: "2.0",
+		ID:      protocol.ID(1),
+		Method:  "tools/list",
+	})
+
+	if response.Error != nil {
+		t.Fatalf("Handle(tools/list) error = %v, want nil", response.Error)
+	}
+
+	var result toolsListResult
+	mustUnmarshalResult(t, response.Result, &result)
+
+	if len(result.Tools) != 1 {
+		t.Fatalf("tool count = %d, want 1", len(result.Tools))
+	}
+	if result.Tools[0].Name != "reverse" {
+		t.Fatalf("tool name = %q, want %q", result.Tools[0].Name, "reverse")
+	}
+}
+
+func TestServer_CallsRegisteredTool(t *testing.T) {
+	t.Parallel()
+
+	server := New(fakeTool{
+		name:        "reverse",
+		description: "Reverse text.",
+	})
+	response := server.Handle(context.Background(), protocol.Request{
+		JSONRPC: "2.0",
+		ID:      protocol.ID(2),
+		Method:  "tools/call",
+		Params:  json.RawMessage(`{"name":"reverse","arguments":{"text":"hello"}}`),
+	})
+
+	if response.Error != nil {
+		t.Fatalf("Handle(tools/call) error = %v, want nil", response.Error)
+	}
+
+	var result toolCallResult
+	mustUnmarshalResult(t, response.Result, &result)
+
+	if len(result.Content) != 1 {
+		t.Fatalf("content count = %d, want 1", len(result.Content))
+	}
+	if result.Content[0].Text != "reverse called" {
+		t.Fatalf("content text = %q, want reverse called", result.Content[0].Text)
+	}
+}
