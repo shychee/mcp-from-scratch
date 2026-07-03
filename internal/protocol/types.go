@@ -18,7 +18,7 @@ const (
 // IDs are limited to integer values for now; real JSON-RPC also permits string IDs.
 type Request struct {
 	JSONRPC string          `json:"jsonrpc"`
-	ID      *int            `json:"id"`
+	ID      *int            `json:"id,omitempty"`
 	Method  string          `json:"method"`
 	Params  json.RawMessage `json:"params,omitempty"`
 }

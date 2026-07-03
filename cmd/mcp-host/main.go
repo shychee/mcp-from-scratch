@@ -28,7 +28,9 @@ func main() {
 
 	for _, exchange := range transcript.Exchanges {
 		printJSON(exchange.Name+" request", exchange.Request)
-		printJSON(exchange.Name+" response", exchange.Response)
+		if exchange.Response != nil {
+			printJSON(exchange.Name+" response", exchange.Response)
+		}
 	}
 }
 

@@ -24,9 +24,9 @@ type Transcript struct {
 }
 
 type Exchange struct {
-	Name     string            `json:"name"`
-	Request  protocol.Request  `json:"request"`
-	Response protocol.Response `json:"response"`
+	Name     string             `json:"name"`
+	Request  protocol.Request   `json:"request"`
+	Response *protocol.Response `json:"response,omitempty"`
 }
 
 func RunDemo(ctx context.Context, serverCommand ServerCommand) (Transcript, error) {
@@ -88,6 +88,14 @@ func runProtocolDemo(client *rpcClient) (Transcript, error) {
 		return Transcript{}, fmt.Errorf("initialize: %w", err)
 	}
 
+	initializedNotification := protocol.Request{
+		JSONRPC: "2.0",
+		Method:  "notifications/initialized",
+	}
+	if err := client.notify(initializedNotification); err != nil {
+		return Transcript{}, fmt.Errorf("notifications/initialized: %w", err)
+	}
+
 	toolsListRequest := protocol.Request{
 		JSONRPC: "2.0",
 		ID:      protocol.ID(2),
@@ -114,9 +122,10 @@ func runProtocolDemo(client *rpcClient) (Transcript, error) {
 		ToolsList:  toolsList,
 		EchoCall:   echoCall,
 		Exchanges: []Exchange{
-			{Name: "initialize", Request: initializeRequest, Response: initialize},
-			{Name: "tools/list", Request: toolsListRequest, Response: toolsList},
-			{Name: "tools/call", Request: echoCallRequest, Response: echoCall},
+			{Name: "initialize", Request: initializeRequest, Response: &initialize},
+			{Name: "notifications/initialized", Request: initializedNotification},
+			{Name: "tools/list", Request: toolsListRequest, Response: &toolsList},
+			{Name: "tools/call", Request: echoCallRequest, Response: &echoCall},
 		},
 	}, nil
 }
@@ -131,4 +140,11 @@ func (c *rpcClient) call(request protocol.Request) (protocol.Response, error) {
 		return protocol.Response{}, fmt.Errorf("decode response: %w", err)
 	}
 	return response, nil
+}
+
+func (c *rpcClient) notify(request protocol.Request) error {
+	if err := c.encoder.Encode(request); err != nil {
+		return fmt.Errorf("encode notification: %w", err)
+	}
+	return nil
 }

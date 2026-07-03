@@ -31,11 +31,20 @@ func TestRunDemoTalksToServerProcess(t *testing.T) {
 	if transcript.EchoCall.Error != nil {
 		t.Fatalf("tools/call error = %v, want nil", transcript.EchoCall.Error)
 	}
-	if len(transcript.Exchanges) != 3 {
-		t.Fatalf("exchange count = %d, want 3", len(transcript.Exchanges))
+	if len(transcript.Exchanges) != 4 {
+		t.Fatalf("exchange count = %d, want 4", len(transcript.Exchanges))
 	}
 	if transcript.Exchanges[0].Request.Method != "initialize" {
 		t.Fatalf("first exchange method = %q, want initialize", transcript.Exchanges[0].Request.Method)
+	}
+	if transcript.Exchanges[1].Request.Method != "notifications/initialized" {
+		t.Fatalf("second exchange method = %q, want notifications/initialized", transcript.Exchanges[1].Request.Method)
+	}
+	if transcript.Exchanges[1].Request.ID != nil {
+		t.Fatalf("initialized notification id = %v, want nil", *transcript.Exchanges[1].Request.ID)
+	}
+	if transcript.Exchanges[1].Response != nil {
+		t.Fatalf("initialized notification response = %v, want nil", transcript.Exchanges[1].Response)
 	}
 
 	var echo struct {
