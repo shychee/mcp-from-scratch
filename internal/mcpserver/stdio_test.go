@@ -64,3 +64,19 @@ func TestServe_InvalidRequestReturnsInvalidRequestError(t *testing.T) {
 		t.Fatalf("error.code = %v, want %d", errorObject["code"], protocol.CodeInvalidRequest)
 	}
 }
+
+func TestServe_NotificationDoesNotWriteResponse(t *testing.T) {
+	server := New()
+
+	input := strings.NewReader(`{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2025-06-18"}}` + "\n")
+	var output bytes.Buffer
+
+	err := server.Serve(context.Background(), input, &output)
+	if err != nil {
+		t.Fatalf("Serve() error = %v", err)
+	}
+
+	if output.Len() != 0 {
+		t.Fatalf("output = %q, want empty", output.String())
+	}
+}

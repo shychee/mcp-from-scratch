@@ -43,6 +43,10 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			}
 			continue
 		}
+		// JSON-RPC notifications have no ID and must not receive responses.
+		if request.ID == nil {
+			continue
+		}
 		if err := encoder.Encode(s.Handle(ctx, request)); err != nil {
 			return fmt.Errorf("encode response: %w", err)
 		}
