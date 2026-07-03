@@ -10,9 +10,11 @@ It is not a complete MCP implementation. The first milestone only models a tiny
 subset of JSON-RPC over stdio:
 
 - `initialize`
+- `notifications/initialized`
 - `tools/list`
 - `tools/call`
-- JSON-RPC parse errors and invalid request errors
+- JSON-RPC parse errors, invalid request errors, method-not-found errors, and
+  invalid-params errors
 
 ## Mental Model
 
@@ -86,10 +88,15 @@ This project currently implements a deliberately small JSON-RPC model:
 - integer request IDs plus explicit `null` response IDs for parse errors
 - standard JSON-RPC error codes used by this project
 - validation for malformed JSON and invalid request envelopes
+- no-response JSON-RPC notifications
+- initialize lifecycle tracking through `notifications/initialized`
 - MCP-like `initialize`, `tools/list`, and `tools/call` method dispatch
+- tool descriptions and calls backed by a small server-side registry
+- defensive validation for missing, unknown, and malformed tool call arguments
+- host-side tool discovery, fake model tool selection, and a transcript of
+  host/server exchanges
 
-It does not yet implement notifications, full MCP lifecycle handling, real tool
-registration, full JSON Schema validation, or a real model adapter.
+It does not yet implement full JSON Schema validation or a real model adapter.
 
 ## Current Tool
 
@@ -148,3 +155,7 @@ Response:
 ## Next Learning Steps
 
 See [docs/learning-roadmap.md](docs/learning-roadmap.md).
+
+## License
+
+MIT. See [LICENSE](LICENSE).

@@ -9,9 +9,11 @@ stdio 传输方式都保持可见。
 它不是完整 MCP 实现。当前里程碑只建模了 JSON-RPC over stdio 的一个很小子集：
 
 - `initialize`
+- `notifications/initialized`
 - `tools/list`
 - `tools/call`
-- JSON-RPC parse error 和 invalid request error
+- JSON-RPC parse error、invalid request error、method-not-found error 和
+  invalid-params error
 
 ## 心智模型
 
@@ -82,10 +84,15 @@ make test
 - integer request ID，以及 parse error response 里的显式 `null` ID
 - 项目目前用到的 JSON-RPC 标准错误码
 - malformed JSON 和 invalid request envelope 校验
+- 不需要 response 的 JSON-RPC notification
+- 通过 `notifications/initialized` 跟踪 initialize lifecycle
 - 类 MCP 的 `initialize`、`tools/list`、`tools/call` method dispatch
+- `tools/list` 和 `tools/call` 由一个小型 server-side registry 驱动
+- 对 missing、unknown、malformed tool call arguments 做防御性校验
+- host-side tool discovery、fake model tool selection，以及 host/server
+  exchange transcript
 
-还没有实现 notification、完整 MCP lifecycle、真实工具注册表、完整 JSON Schema
-校验，也没有接入真实模型 adapter。
+还没有实现完整 JSON Schema 校验，也没有接入真实模型 adapter。
 
 ## 当前 Tool
 
@@ -144,3 +151,7 @@ server 暴露了一个玩具工具：
 ## 后续学习步骤
 
 见 [docs/learning-roadmap.md](docs/learning-roadmap.md)。
+
+## License
+
+MIT. 见 [LICENSE](LICENSE)。
