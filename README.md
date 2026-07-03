@@ -1,5 +1,7 @@
 # MCP From Scratch
 
+English | [中文](README.zh.md)
+
 This is a small Go learning project for understanding the moving parts behind
 Model Context Protocol style tool use. It intentionally avoids MCP SDKs in the
 first stage so the host/server boundary stays visible.
@@ -10,6 +12,7 @@ subset of JSON-RPC over stdio:
 - `initialize`
 - `tools/list`
 - `tools/call`
+- JSON-RPC parse errors and invalid request errors
 
 ## Mental Model
 
@@ -30,6 +33,7 @@ cmd/mcp-host
 
 cmd/mcp-server
   reads newline-delimited JSON-RPC requests from stdin
+  validates the JSON-RPC envelope
   handles initialize, tools/list, and tools/call
   writes JSON-RPC responses to stdout
 ```
@@ -73,6 +77,19 @@ The tests are intentionally split by learning boundary:
 - `internal/mcpserver` tests the server protocol behavior directly.
 - `internal/host` starts a real server subprocess and verifies stdio JSON-RPC
   round trips.
+
+## What This Implements
+
+This project currently implements a deliberately small JSON-RPC model:
+
+- request and response envelopes
+- integer request IDs plus explicit `null` response IDs for parse errors
+- standard JSON-RPC error codes used by this project
+- validation for malformed JSON and invalid request envelopes
+- MCP-like `initialize`, `tools/list`, and `tools/call` method dispatch
+
+It does not yet implement notifications, full MCP lifecycle handling, real tool
+registration, full JSON Schema validation, or a real model adapter.
 
 ## Current Tool
 
@@ -130,8 +147,4 @@ Response:
 
 ## Next Learning Steps
 
-1. Add a second tool such as `add` to see how `tools/list` schema maps to
-   `tools/call` arguments.
-2. Add request validation and JSON-RPC error cases.
-3. Replace the mock host decision with an OpenAI function calling adapter.
-4. Compare this hand-written version with the official MCP SDK.
+See [docs/learning-roadmap.md](docs/learning-roadmap.md).
