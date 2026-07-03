@@ -16,11 +16,27 @@ type ServerCommand struct {
 	Dir  string
 }
 
+type ToolDescription struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	InputSchema map[string]any `json:"inputSchema"`
+}
+
+type toolsListResult struct {
+	Tools []ToolDescription `json:"tools"`
+}
+
+type ToolCallDecision struct {
+	ToolName  string
+	Arguments json.RawMessage
+}
+
 type Transcript struct {
-	Initialize protocol.Response
-	ToolsList  protocol.Response
-	EchoCall   protocol.Response
-	Exchanges  []Exchange
+	Initialize      protocol.Response
+	ToolsList       protocol.Response
+	EchoCall        protocol.Response
+	Exchanges       []Exchange
+	DiscoveredTools []ToolDescription
 }
 
 type Exchange struct {
@@ -106,11 +122,28 @@ func runProtocolDemo(client *rpcClient) (Transcript, error) {
 		return Transcript{}, fmt.Errorf("tools/list: %w", err)
 	}
 
+	var listedTools toolsListResult
+	if err := json.Unmarshal(toolsList.Result, &listedTools); err != nil {
+		return Transcript{}, fmt.Errorf("decode tools/list result: %w", err)
+	}
+
+	decision, err := fakeModelDecision(listedTools.Tools, "hello from fake model")
+	if err != nil {
+		return Transcript{}, fmt.Errorf("fake model decision: %w", err)
+	}
+	toolCallParams := map[string]any{
+		"name":      decision.ToolName,
+		"arguments": json.RawMessage(decision.Arguments),
+	}
+	toolCallParamsJSON, err := json.Marshal(toolCallParams)
+	if err != nil {
+		return Transcript{}, fmt.Errorf("encode tools/call params: %w", err)
+	}
 	echoCallRequest := protocol.Request{
 		JSONRPC: "2.0",
 		ID:      protocol.ID(3),
 		Method:  "tools/call",
-		Params:  json.RawMessage(`{"name":"echo","arguments":{"text":"hello from host"}}`),
+		Params:  toolCallParamsJSON,
 	}
 	echoCall, err := client.call(echoCallRequest)
 	if err != nil {
@@ -118,9 +151,10 @@ func runProtocolDemo(client *rpcClient) (Transcript, error) {
 	}
 
 	return Transcript{
-		Initialize: initialize,
-		ToolsList:  toolsList,
-		EchoCall:   echoCall,
+		Initialize:      initialize,
+		ToolsList:       toolsList,
+		EchoCall:        echoCall,
+		DiscoveredTools: listedTools.Tools,
 		Exchanges: []Exchange{
 			{Name: "initialize", Request: initializeRequest, Response: &initialize},
 			{Name: "notifications/initialized", Request: initializedNotification},
@@ -147,4 +181,23 @@ func (c *rpcClient) notify(request protocol.Request) error {
 		return fmt.Errorf("encode notification: %w", err)
 	}
 	return nil
+}
+
+func fakeModelDecision(tools []ToolDescription, userText string) (ToolCallDecision, error) {
+	for _, tool := range tools {
+		if tool.Name == "echo" {
+			arguments, err := json.Marshal(map[string]string{
+				"text": userText,
+			})
+			if err != nil {
+				return ToolCallDecision{}, fmt.Errorf("encode echo arguments: %w", err)
+			}
+			return ToolCallDecision{
+				ToolName:  tool.Name,
+				Arguments: arguments,
+			}, nil
+		}
+	}
+
+	return ToolCallDecision{}, fmt.Errorf("no echo tool discovered")
 }

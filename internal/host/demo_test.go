@@ -46,6 +46,12 @@ func TestRunDemoTalksToServerProcess(t *testing.T) {
 	if transcript.Exchanges[1].Response != nil {
 		t.Fatalf("initialized notification response = %v, want nil", transcript.Exchanges[1].Response)
 	}
+	if len(transcript.DiscoveredTools) != 1 {
+		t.Fatalf("discovered tool count = %d, want 1", len(transcript.DiscoveredTools))
+	}
+	if transcript.DiscoveredTools[0].Name != "echo" {
+		t.Fatalf("discovered tool name = %q, want echo", transcript.DiscoveredTools[0].Name)
+	}
 
 	var echo struct {
 		Content []struct {
@@ -59,8 +65,38 @@ func TestRunDemoTalksToServerProcess(t *testing.T) {
 	if len(echo.Content) != 1 {
 		t.Fatalf("echo content count = %d, want 1", len(echo.Content))
 	}
-	if echo.Content[0].Text != "hello from host" {
-		t.Fatalf("echo text = %q, want hello from host", echo.Content[0].Text)
+	if echo.Content[0].Text != "hello from fake model" {
+		t.Fatalf("echo text = %q, want hello from fake model", echo.Content[0].Text)
+	}
+}
+
+func TestFakeModelDecisionChoosesEchoTool(t *testing.T) {
+	t.Parallel()
+
+	decision, err := fakeModelDecision(
+		[]ToolDescription{
+			{
+				Name: "echo",
+			},
+		},
+		"hello from fake model",
+	)
+	if err != nil {
+		t.Fatalf("fakeModelDecision() error = %v, want nil", err)
+	}
+
+	if decision.ToolName != "echo" {
+		t.Fatalf("tool name = %q, want echo", decision.ToolName)
+	}
+
+	var args struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(decision.Arguments, &args); err != nil {
+		t.Fatalf("unmarshal arguments: %v", err)
+	}
+	if args.Text != "hello from fake model" {
+		t.Fatalf("argument text = %q, want hello from fake model", args.Text)
 	}
 }
 
