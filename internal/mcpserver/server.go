@@ -159,12 +159,100 @@ func (s *Server) callTool(raw json.RawMessage) (toolCallResult, error) {
 	}
 
 	for _, registeredTool := range s.tools {
-		if registeredTool.Definition().Name == params.Name {
+		definition := registeredTool.Definition()
+		if definition.Name == params.Name {
+			if err := validateToolArguments(definition, params.Arguments); err != nil {
+				return toolCallResult{}, err
+			}
 			return registeredTool.Call(params.Arguments)
 		}
 	}
 
 	return toolCallResult{}, fmt.Errorf("unknown tool %q", params.Name)
+}
+
+func validateToolArguments(definition tool, raw json.RawMessage) error {
+	schema := definition.InputSchema
+	if !requiresObjectArguments(schema) {
+		return nil
+	}
+
+	var arguments map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &arguments); err != nil {
+		return fmt.Errorf("tool arguments must be an object")
+	}
+
+	for _, name := range requiredProperties(schema) {
+		if _, ok := arguments[name]; !ok {
+			return fmt.Errorf("missing required argument %q", name)
+		}
+	}
+
+	for name, rawValue := range arguments {
+		expectedType, ok := propertyType(schema, name)
+		if !ok {
+			continue
+		}
+		if expectedType == "string" && !isJSONString(rawValue) {
+			return fmt.Errorf("argument %q must be a string", name)
+		}
+	}
+	return nil
+}
+
+func requiresObjectArguments(schema map[string]any) bool {
+	return schemaType(schema) == "object" || len(requiredProperties(schema)) > 0
+}
+
+func propertyType(schema map[string]any, name string) (string, bool) {
+	rawProperties, ok := schema["properties"].(map[string]any)
+	if !ok {
+		return "", false
+	}
+
+	rawProperty, ok := rawProperties[name].(map[string]any)
+	if !ok {
+		return "", false
+	}
+
+	propertyType, ok := rawProperty["type"].(string)
+	return propertyType, ok
+}
+
+func isJSONString(raw json.RawMessage) bool {
+	var value string
+	return json.Unmarshal(raw, &value) == nil
+}
+
+func schemaType(schema map[string]any) string {
+	schemaType, _ := schema["type"].(string)
+	return schemaType
+}
+
+func requiredProperties(schema map[string]any) []string {
+	rawRequired, ok := schema["required"]
+	if !ok {
+		return nil
+	}
+
+	required, ok := rawRequired.([]string)
+	if ok {
+		return required
+	}
+
+	values, ok := rawRequired.([]any)
+	if !ok {
+		return nil
+	}
+
+	names := make([]string, 0, len(values))
+	for _, value := range values {
+		name, ok := value.(string)
+		if ok {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 func mustMarshal(value any) json.RawMessage {
