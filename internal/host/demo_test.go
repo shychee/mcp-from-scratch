@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"testing"
 	"time"
@@ -67,6 +68,45 @@ func TestRunDemoTalksToServerProcess(t *testing.T) {
 	}
 	if echo.Content[0].Text != "hello from fake model" {
 		t.Fatalf("echo text = %q, want hello from fake model", echo.Content[0].Text)
+	}
+}
+
+func TestToolDescriptionsBecomeOpenAICompatibleTools(t *testing.T) {
+	t.Parallel()
+
+	inputSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"text": map[string]any{
+				"type":        "string",
+				"description": "Text to return.",
+			},
+		},
+		"required": []string{"text"},
+	}
+
+	tools := openAIToolsFromToolDescriptions([]ToolDescription{
+		{
+			Name:        "echo",
+			Description: "Return the text argument back to the caller.",
+			InputSchema: inputSchema,
+		},
+	})
+
+	if len(tools) != 1 {
+		t.Fatalf("tool count = %d, want 1", len(tools))
+	}
+	if tools[0].Type != "function" {
+		t.Fatalf("tool type = %q, want function", tools[0].Type)
+	}
+	if tools[0].Function.Name != "echo" {
+		t.Fatalf("function name = %q, want echo", tools[0].Function.Name)
+	}
+	if tools[0].Function.Description != "Return the text argument back to the caller." {
+		t.Fatalf("function description = %q, want echo description", tools[0].Function.Description)
+	}
+	if !reflect.DeepEqual(tools[0].Function.Parameters, inputSchema) {
+		t.Fatalf("function parameters = %#v, want %#v", tools[0].Function.Parameters, inputSchema)
 	}
 }
 

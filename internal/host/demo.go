@@ -22,6 +22,17 @@ type ToolDescription struct {
 	InputSchema map[string]any `json:"inputSchema"`
 }
 
+type openAITool struct {
+	Type     string         `json:"type"`
+	Function openAIFunction `json:"function"`
+}
+
+type openAIFunction struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	Parameters  map[string]any `json:"parameters"`
+}
+
 type toolsListResult struct {
 	Tools []ToolDescription `json:"tools"`
 }
@@ -181,6 +192,21 @@ func (c *rpcClient) notify(request protocol.Request) error {
 		return fmt.Errorf("encode notification: %w", err)
 	}
 	return nil
+}
+
+func openAIToolsFromToolDescriptions(tools []ToolDescription) []openAITool {
+	openAITools := make([]openAITool, 0, len(tools))
+	for _, tool := range tools {
+		openAITools = append(openAITools, openAITool{
+			Type: "function",
+			Function: openAIFunction{
+				Name:        tool.Name,
+				Description: tool.Description,
+				Parameters:  tool.InputSchema,
+			},
+		})
+	}
+	return openAITools
 }
 
 func fakeModelDecision(tools []ToolDescription, userText string) (ToolCallDecision, error) {

@@ -83,9 +83,113 @@ Why it matters:
 The host is the bridge between model-facing tool calls and MCP-facing tool
 calls. This step makes that bridge explicit without requiring a real LLM.
 
-## 6. Real Model Adapter
+## 6. Server-Side Tool Schema Enforcement
 
-Question: how do OpenAI function calling and MCP fit together?
+Question: what is the difference between publishing a schema and enforcing it?
+
+Target behavior:
+
+- keep `inputSchema` in `tools/list` as the public contract
+- validate `tools/call` arguments against each tool's schema before dispatch
+- return `CodeInvalidParams` for schema violations
+- keep tool-specific business validation inside the tool implementation
+
+Why it matters:
+
+Schemas are not just hints for the model. The server is the trust boundary, so
+it still needs to reject malformed or unsafe inputs even when a client or model
+claims the call is valid.
+
+## 7. Rich Tool Results
+
+Question: what can a tool return besides one text block?
+
+Target behavior:
+
+- support multiple text content blocks in `tools/call` results
+- add `isError` for tool execution failures that are not protocol errors
+- add `structuredContent` for machine-readable output
+- optionally describe `outputSchema` in tool definitions
+
+Why it matters:
+
+MCP separates protocol errors from tool execution errors. It also lets tools
+return both human-readable content and structured data that clients and models
+can handle more reliably.
+
+## 8. Resources
+
+Question: how does a server expose readable context instead of executable
+actions?
+
+Target behavior:
+
+- declare the `resources` capability during `initialize`
+- implement `resources/list`
+- implement `resources/read`
+- use URI-based resource identity such as `demo://...`
+
+Why it matters:
+
+Tools are actions. Resources are data. A model may need logs, files, schemas, or
+application state as context without invoking an operation that changes the
+world.
+
+## 9. Prompts
+
+Question: how does a server expose reusable prompt templates?
+
+Target behavior:
+
+- declare the `prompts` capability during `initialize`
+- implement `prompts/list`
+- implement `prompts/get`
+- render prompt messages from simple arguments
+
+Why it matters:
+
+Prompts are user-controlled workflows or templates. They let a server teach a
+host how to ask good domain-specific questions without hard-coding those
+prompts into the host.
+
+## 10. Pagination And List Change Notifications
+
+Question: what happens when a server has more tools, resources, or prompts than
+fit comfortably in one response?
+
+Target behavior:
+
+- accept optional `cursor` params for list methods
+- return optional `nextCursor`
+- advertise `listChanged` only when the server can send matching notifications
+- implement one list-changed notification path after a registry update
+
+Why it matters:
+
+Real MCP servers may expose dynamic or large catalogs. Pagination and change
+notifications keep discovery explicit without requiring clients to constantly
+reload everything.
+
+## 11. Lifecycle And Transport Hardening
+
+Question: what protocol rules should the server enforce before it is treated as
+a real MCP server?
+
+Target behavior:
+
+- reject normal requests before `initialize`, except allowed lifecycle probes
+- negotiate or reject unsupported protocol versions deliberately
+- keep stdout strictly JSON-RPC-only and use stderr for logs
+- preserve newline-delimited stdio framing
+
+Why it matters:
+
+The server is not only method handlers. A usable MCP server also owns session
+state, version/capability negotiation, and transport discipline.
+
+## 12. Real Model Adapter
+
+Question: how do model-native tool calls and MCP fit together?
 
 Target behavior:
 
@@ -97,4 +201,5 @@ Target behavior:
 Why it matters:
 
 Function calling standardizes how the model asks for a tool. MCP standardizes
-how the host talks to the tool server.
+how the host talks to the tool server. This is useful, but it can wait until the
+server-side protocol surface is more complete.
