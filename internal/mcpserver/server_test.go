@@ -8,6 +8,31 @@ import (
 	"github.com/shychee/mcp-from-scratch/internal/protocol"
 )
 
+type schemaValidatedTool struct {
+	called bool
+}
+
+func (t *schemaValidatedTool) Definition() tool {
+	return tool{
+		Name:        "validated",
+		Description: "Require text.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"text": map[string]any{
+					"type": "string",
+				},
+			},
+			"required": []string{"text"},
+		},
+	}
+}
+
+func (t *schemaValidatedTool) Call(_ json.RawMessage) (toolCallResult, error) {
+	t.called = true
+	return toolCallResult{}, nil
+}
+
 func TestServer_InitializeReturnsServerInfo(t *testing.T) {
 	t.Parallel()
 
@@ -204,6 +229,31 @@ func TestServer_CallsRegisteredTool(t *testing.T) {
 	}
 }
 
+func TestServer_CallToolRejectsNonObjectArgumentsForObjectSchema(t *testing.T) {
+	t.Parallel()
+
+	server := New(fakeTool{
+		name:        "reverse",
+		description: "Reverse text.",
+	})
+	response := server.Handle(context.Background(), protocol.Request{
+		JSONRPC: "2.0",
+		ID:      protocol.ID(2),
+		Method:  "tools/call",
+		Params:  json.RawMessage(`{"name":"reverse","arguments":"not an object"}`),
+	})
+
+	if response.Error == nil {
+		t.Fatal("Handle(tools/call) error = nil, want invalid params error")
+	}
+	if response.Error.Code != protocol.CodeInvalidParams {
+		t.Fatalf("error code = %d, want %d", response.Error.Code, protocol.CodeInvalidParams)
+	}
+	if response.Error.Message != "tool arguments must be an object" {
+		t.Fatalf("error message = %q, want tool arguments object error", response.Error.Message)
+	}
+}
+
 func TestServer_CallToolRejectsMissingToolName(t *testing.T) {
 	t.Parallel()
 
@@ -248,6 +298,99 @@ func TestServer_CallToolRejectsUnknownTool(t *testing.T) {
 	}
 }
 
+func TestServer_CallToolRejectsMissingRequiredSchemaArgument(t *testing.T) {
+	t.Parallel()
+
+	tool := &schemaValidatedTool{}
+	server := New(tool)
+
+	response := server.Handle(context.Background(), protocol.Request{
+		JSONRPC: "2.0",
+		ID:      protocol.ID(1),
+		Method:  "tools/call",
+		Params:  json.RawMessage(`{"name":"validated","arguments":{}}`),
+	})
+
+	if response.Error == nil {
+		t.Fatal("Handle(tools/call) error = nil, want invalid params error")
+	}
+	if response.Error.Code != protocol.CodeInvalidParams {
+		t.Fatalf("error code = %d, want %d", response.Error.Code, protocol.CodeInvalidParams)
+	}
+	if tool.called {
+		t.Fatal("tool was called, want schema validation to reject before dispatch")
+	}
+}
+
+func TestServer_CallToolAcceptsPresentRequiredSchemaArgument(t *testing.T) {
+	t.Parallel()
+
+	tool := &schemaValidatedTool{}
+	server := New(tool)
+
+	response := server.Handle(context.Background(), protocol.Request{
+		JSONRPC: "2.0",
+		ID:      protocol.ID(1),
+		Method:  "tools/call",
+		Params:  json.RawMessage(`{"name":"validated","arguments":{"text":"hello"}}`),
+	})
+
+	if response.Error != nil {
+		t.Fatalf("Handle(tools/call) error = %v, want nil", response.Error)
+	}
+	if !tool.called {
+		t.Fatal("tool was not called, want schema validation to allow dispatch")
+	}
+}
+
+func TestServer_CallToolRejectsNonObjectSchemaArguments(t *testing.T) {
+	t.Parallel()
+
+	tool := &schemaValidatedTool{}
+	server := New(tool)
+
+	response := server.Handle(context.Background(), protocol.Request{
+		JSONRPC: "2.0",
+		ID:      protocol.ID(1),
+		Method:  "tools/call",
+		Params:  json.RawMessage(`{"name":"validated","arguments":"not an object"}`),
+	})
+
+	if response.Error == nil {
+		t.Fatal("Handle(tools/call) error = nil, want invalid params error")
+	}
+	if response.Error.Code != protocol.CodeInvalidParams {
+		t.Fatalf("error code = %d, want %d", response.Error.Code, protocol.CodeInvalidParams)
+	}
+	if tool.called {
+		t.Fatal("tool was called, want schema validation to reject before dispatch")
+	}
+}
+
+func TestServer_CallToolRejectsWrongStringSchemaArgumentType(t *testing.T) {
+	t.Parallel()
+
+	tool := &schemaValidatedTool{}
+	server := New(tool)
+
+	response := server.Handle(context.Background(), protocol.Request{
+		JSONRPC: "2.0",
+		ID:      protocol.ID(1),
+		Method:  "tools/call",
+		Params:  json.RawMessage(`{"name":"validated","arguments":{"text":123}}`),
+	})
+
+	if response.Error == nil {
+		t.Fatal("Handle(tools/call) error = nil, want invalid params error")
+	}
+	if response.Error.Code != protocol.CodeInvalidParams {
+		t.Fatalf("error code = %d, want %d", response.Error.Code, protocol.CodeInvalidParams)
+	}
+	if tool.called {
+		t.Fatal("tool was called, want schema validation to reject before dispatch")
+	}
+}
+
 func TestServer_CallEchoRejectsMalformedArguments(t *testing.T) {
 	t.Parallel()
 
@@ -265,7 +408,7 @@ func TestServer_CallEchoRejectsMalformedArguments(t *testing.T) {
 	if response.Error.Code != protocol.CodeInvalidParams {
 		t.Fatalf("error code = %d, want %d", response.Error.Code, protocol.CodeInvalidParams)
 	}
-	if response.Error.Message != "decode echo arguments: json: cannot unmarshal string into Go value of type mcpserver.echoArguments" {
-		t.Fatalf("error message = %q, want decode echo arguments error", response.Error.Message)
+	if response.Error.Message != "tool arguments must be an object" {
+		t.Fatalf("error message = %q, want tool arguments object error", response.Error.Message)
 	}
 }
