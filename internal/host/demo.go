@@ -188,15 +188,28 @@ func runProtocolDemo(client *rpcClient) (Transcript, error) {
 }
 
 func decodeCompleteResult(raw json.RawMessage, target any) error {
-	var envelope struct {
-		ResultType string `json:"resultType"`
-	}
+	var envelope map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &envelope); err != nil {
 		return fmt.Errorf("decode result envelope: %w", err)
 	}
-	resultType := envelope.ResultType
-	if resultType == "" {
-		resultType = protocol.ResultTypeComplete
+	if envelope == nil {
+		return fmt.Errorf("decode result envelope: result must be an object")
+	}
+
+	resultType := protocol.ResultTypeComplete
+	if rawResultType, ok := envelope["resultType"]; ok {
+		var decodedResultType any
+		if err := json.Unmarshal(rawResultType, &decodedResultType); err != nil {
+			return fmt.Errorf("decode result envelope: invalid result type: %w", err)
+		}
+		var valid bool
+		resultType, valid = decodedResultType.(string)
+		if !valid {
+			return fmt.Errorf("decode result envelope: result type must be a string")
+		}
+		if resultType == "" {
+			return fmt.Errorf("decode result envelope: result type must not be empty")
+		}
 	}
 	if resultType != protocol.ResultTypeComplete {
 		return fmt.Errorf("unsupported result type %q", resultType)
@@ -226,6 +239,9 @@ func (c *rpcClient) call(request protocol.Request) (protocol.Response, error) {
 	var response protocol.Response
 	if err := c.decoder.Decode(&response); err != nil {
 		return protocol.Response{}, fmt.Errorf("decode response: %w", err)
+	}
+	if response.Error != nil {
+		return response, response.Error
 	}
 	return response, nil
 }

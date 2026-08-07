@@ -1,11 +1,13 @@
 package host
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -169,6 +171,62 @@ func TestDecodeCompleteResultRejectsUnsupportedType(t *testing.T) {
 	err := decodeCompleteResult(json.RawMessage(`{"resultType":"input-required"}`), &struct{}{})
 	if err == nil {
 		t.Fatal("decodeCompleteResult() error = nil, want unsupported result type error")
+	}
+}
+
+func TestDecodeCompleteResultRejectsMalformedEnvelopes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		raw  json.RawMessage
+	}{
+		{name: "null result", raw: json.RawMessage(`null`)},
+		{name: "null result type", raw: json.RawMessage(`{"resultType":null}`)},
+		{name: "empty result type", raw: json.RawMessage(`{"resultType":""}`)},
+		{name: "non-string result type", raw: json.RawMessage(`{"resultType":1}`)},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			if err := decodeCompleteResult(test.raw, &struct{}{}); err == nil {
+				t.Fatal("decodeCompleteResult() error = nil, want malformed envelope error")
+			}
+		})
+	}
+}
+
+func TestRPCClientCallReturnsJSONRPCError(t *testing.T) {
+	t.Parallel()
+
+	var request bytes.Buffer
+	client := rpcClient{
+		encoder: json.NewEncoder(&request),
+		decoder: json.NewDecoder(strings.NewReader(
+			`{"jsonrpc":"2.0","id":1,"error":{"code":-32022,"message":"unsupported protocol version","data":{"requested":"2025-03-26","supported":["2026-07-28"]}}}`,
+		)),
+	}
+
+	response, err := client.call(protocol.Request{
+		JSONRPC: "2.0",
+		ID:      protocol.ID(1),
+		Method:  "tools/list",
+	})
+	if err == nil {
+		t.Fatal("call() error = nil, want JSON-RPC error")
+	}
+	if response.Error == nil {
+		t.Fatal("call() response error = nil, want decoded JSON-RPC error")
+	}
+	if err != response.Error {
+		t.Fatalf("call() error = %T %v, want response error", err, err)
+	}
+	for _, want := range []string{"-32022", "unsupported protocol version", "2025-03-26", "2026-07-28"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("call() error = %q, want substring %q", err, want)
+		}
 	}
 }
 

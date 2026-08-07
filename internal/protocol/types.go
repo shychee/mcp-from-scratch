@@ -1,6 +1,9 @@
 package protocol
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 const (
 	Version20260728    = "2026-07-28"
@@ -97,6 +100,22 @@ type Error struct {
 	Code    ErrorCode `json:"code"`
 	Message string    `json:"message"`
 	Data    any       `json:"data,omitempty"`
+}
+
+// Error formats the JSON-RPC error without discarding its machine-readable data.
+func (e *Error) Error() string {
+	if e == nil {
+		return "<nil>"
+	}
+	if e.Data == nil {
+		return fmt.Sprintf("JSON-RPC error %d: %s", e.Code, e.Message)
+	}
+
+	data, err := json.Marshal(e.Data)
+	if err != nil {
+		return fmt.Sprintf("JSON-RPC error %d: %s (data: %v)", e.Code, e.Message, e.Data)
+	}
+	return fmt.Sprintf("JSON-RPC error %d: %s (data: %s)", e.Code, e.Message, data)
 }
 
 // NewError creates a JSON-RPC error object.
