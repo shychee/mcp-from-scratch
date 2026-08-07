@@ -11,7 +11,8 @@ shows the protocol becoming more complete.
 The historical baseline was a deliberately small subset of MCP `2025-06-18`:
 JSON-RPC over stdio, `initialize`, `notifications/initialized`, `tools/list`,
 and `tools/call`. The executable code now targets MCP `2026-07-28` and uses
-stateless discovery plus per-request metadata.
+stateless discovery, per-request metadata, and complete/cacheable result
+envelopes.
 
 The target changes the project's protocol model in several important ways:
 
@@ -37,7 +38,7 @@ Primary references:
 ### Core protocol path
 
 1. [x] [#11 Replace initialization with stateless discovery](https://github.com/shychee/mcp-from-scratch/issues/11)
-2. [ ] [#12 Adopt complete and cacheable result envelopes](https://github.com/shychee/mcp-from-scratch/issues/12)
+2. [x] [#12 Adopt complete and cacheable result envelopes](https://github.com/shychee/mcp-from-scratch/issues/12)
 3. [ ] [#13 Implement one stateless MRTR elicitation flow](https://github.com/shychee/mcp-from-scratch/issues/13)
 4. [ ] [#14 Add a stateless Streamable HTTP tool-call path](https://github.com/shychee/mcp-from-scratch/issues/14)
 5. [ ] [#15 Deliver tool list changes through subscriptions/listen](https://github.com/shychee/mcp-from-scratch/issues/15)

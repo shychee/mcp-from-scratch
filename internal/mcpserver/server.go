@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 
 	"github.com/shychee/mcp-from-scratch/internal/protocol"
 )
@@ -11,6 +12,7 @@ import (
 const (
 	protocolVersion    = protocol.Version20260728
 	discoveryTTLMillis = 60 * 60 * 1000
+	toolsListTTLMillis = 5 * 60 * 1000
 	serverName         = "mcp-from-scratch"
 	serverVersion      = "0.1.0"
 )
@@ -40,7 +42,7 @@ type unsupportedProtocolVersionData struct {
 }
 
 type toolsListResult struct {
-	protocol.Result
+	protocol.CacheableResult
 	Tools []tool `json:"tools"`
 }
 
@@ -93,7 +95,7 @@ func (s *Server) Handle(_ context.Context, request protocol.Request) protocol.Re
 	case "server/discover":
 		response.Result = mustMarshal(discoverResult{
 			CacheableResult: protocol.CacheableResult{
-				Result:     newResult(protocol.ResultTypeComplete),
+				Result:     newResult(),
 				TTLMillis:  discoveryTTLMillis,
 				CacheScope: protocol.CacheScopePublic,
 			},
@@ -107,9 +109,16 @@ func (s *Server) Handle(_ context.Context, request protocol.Request) protocol.Re
 		for _, t := range s.tools {
 			tools = append(tools, t.Definition())
 		}
+		sort.Slice(tools, func(i, j int) bool {
+			return tools[i].Name < tools[j].Name
+		})
 		response.Result = mustMarshal(toolsListResult{
-			Result: newResult(""),
-			Tools:  tools,
+			CacheableResult: protocol.CacheableResult{
+				Result:     newResult(),
+				TTLMillis:  toolsListTTLMillis,
+				CacheScope: protocol.CacheScopePublic,
+			},
+			Tools: tools,
 		})
 	case "tools/call":
 		result, err := s.callTool(request.Params)
@@ -117,7 +126,7 @@ func (s *Server) Handle(_ context.Context, request protocol.Request) protocol.Re
 			response.Error = protocol.NewError(protocol.CodeInvalidParams, err.Error())
 			return response
 		}
-		result.Result = newResult("")
+		result.Result = newResult()
 		response.Result = mustMarshal(result)
 	default:
 		response.Error = protocol.NewError(protocol.CodeMethodNotFound, "method not found")
@@ -126,9 +135,9 @@ func (s *Server) Handle(_ context.Context, request protocol.Request) protocol.Re
 	return response
 }
 
-func newResult(resultType string) protocol.Result {
+func newResult() protocol.Result {
 	return protocol.Result{
-		ResultType: resultType,
+		ResultType: protocol.ResultTypeComplete,
 		Meta: protocol.ResultMeta{
 			ServerInfo: protocol.Implementation{
 				Name:    serverName,

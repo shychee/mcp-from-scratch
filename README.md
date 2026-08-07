@@ -11,6 +11,7 @@ subset of MCP `2026-07-28` over JSON-RPC and stdio:
 
 - stateless `server/discover`
 - protocol version, client identity, and client capabilities on every request
+- complete result envelopes, with cache hints on discovery and list results
 - `tools/list`
 - `tools/call`
 - JSON-RPC parse errors, invalid request errors, method-not-found errors, and
@@ -24,10 +25,10 @@ tracked in issues
 [#10](https://github.com/shychee/mcp-from-scratch/issues/10) through
 [#24](https://github.com/shychee/mcp-from-scratch/issues/24).
 
-The first core step is complete: session initialization has been replaced by
-stateless `server/discover`, and every request is validated independently.
-Complete and cacheable result envelopes are the next step, followed by MRTR,
-Streamable HTTP, and `subscriptions/listen`. OAuth, Tasks, extensions, tracing,
+The first two core steps are complete: session initialization has been replaced
+by stateless `server/discover`, every request is validated independently, and
+successful responses use complete result envelopes. MRTR is next, followed by
+Streamable HTTP and `subscriptions/listen`. OAuth, Tasks, extensions, tracing,
 and interoperability work build on that core instead of blocking it.
 
 See [the learning roadmap](docs/learning-roadmap.md) for the ordered migration,
@@ -109,7 +110,10 @@ This project currently implements a deliberately small JSON-RPC model:
 - stateless request metadata validation for the `2026-07-28` protocol version
 - the standard `-32022` unsupported-version error with negotiation data
 - `server/discover`, `tools/list`, and `tools/call` method dispatch
-- server identity metadata on every successful result
+- `resultType: complete` and server identity metadata on every successful result
+- public cache hints for discovery and tool-list results
+- deterministic tool-list ordering by tool name
+- host compatibility with legacy successful results that omit `resultType`
 - tool descriptions and calls backed by a small server-side registry
 - defensive validation for missing, unknown, and malformed tool call arguments
 - host-side tool discovery, fake model tool selection, and a transcript of
@@ -169,6 +173,7 @@ Response:
   "jsonrpc": "2.0",
   "id": 3,
   "result": {
+    "resultType": "complete",
     "_meta": {
       "io.modelcontextprotocol/serverInfo": {
         "name": "mcp-from-scratch",

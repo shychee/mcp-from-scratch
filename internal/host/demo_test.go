@@ -150,6 +150,28 @@ func TestFakeModelDecisionChoosesEchoTool(t *testing.T) {
 	}
 }
 
+func TestDecodeCompleteResultAcceptsLegacyResultWithoutType(t *testing.T) {
+	t.Parallel()
+
+	var result toolsListResult
+	err := decodeCompleteResult(json.RawMessage(`{"tools":[]}`), &result)
+	if err != nil {
+		t.Fatalf("decodeCompleteResult() error = %v, want nil", err)
+	}
+	if result.Tools == nil {
+		t.Fatal("tools = nil, want decoded empty list")
+	}
+}
+
+func TestDecodeCompleteResultRejectsUnsupportedType(t *testing.T) {
+	t.Parallel()
+
+	err := decodeCompleteResult(json.RawMessage(`{"resultType":"input-required"}`), &struct{}{})
+	if err == nil {
+		t.Fatal("decodeCompleteResult() error = nil, want unsupported result type error")
+	}
+}
+
 func projectRoot(t *testing.T) string {
 	t.Helper()
 

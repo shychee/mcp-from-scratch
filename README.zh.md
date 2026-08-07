@@ -11,6 +11,7 @@ stdio 上的一个小型子集：
 
 - 无状态 `server/discover`
 - 每个请求携带协议版本、客户端 identity 和客户端 capabilities
+- 完整结果信封，以及 discovery/list 结果的缓存提示
 - `tools/list`
 - `tools/call`
 - JSON-RPC parse error、invalid request error、method-not-found error 和
@@ -23,8 +24,8 @@ stdio 上的一个小型子集：
 [#10](https://github.com/shychee/mcp-from-scratch/issues/10) 到
 [#24](https://github.com/shychee/mcp-from-scratch/issues/24)。
 
-核心迁移的第一步已经完成：无状态 `server/discover` 已替代会话初始化，每个请求都
-会被独立校验。下一步是完整、可缓存的结果信封，之后依次实现 MRTR、Streamable
+核心迁移的前两步已经完成：无状态 `server/discover` 已替代会话初始化，每个请求都
+会被独立校验，成功响应使用完整结果信封。下一步是 MRTR，之后依次实现 Streamable
 HTTP 和 `subscriptions/listen`。OAuth、Tasks、扩展、trace 和互操作性验证建立在
 核心协议之上，不阻塞核心迁移。
 
@@ -104,7 +105,10 @@ make test
 - 针对 `2026-07-28` 协议版本的无状态 request metadata 校验
 - 带协商数据的标准 `-32022` unsupported-version error
 - `server/discover`、`tools/list`、`tools/call` method dispatch
-- 每个成功结果都携带 server identity metadata
+- 每个成功结果都携带 `resultType: complete` 和 server identity metadata
+- discovery 和 tool list 结果携带 public cache hints
+- tool list 按工具名稳定排序
+- host 兼容缺少 `resultType` 的旧版成功结果
 - `tools/list` 和 `tools/call` 由一个小型 server-side registry 驱动
 - 对 missing、unknown、malformed tool call arguments 做防御性校验
 - host-side tool discovery、fake model tool selection，以及 host/server
@@ -164,6 +168,7 @@ server 暴露了一个玩具工具：
   "jsonrpc": "2.0",
   "id": 3,
   "result": {
+    "resultType": "complete",
     "_meta": {
       "io.modelcontextprotocol/serverInfo": {
         "name": "mcp-from-scratch",

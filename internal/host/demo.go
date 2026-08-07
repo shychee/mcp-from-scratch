@@ -127,6 +127,9 @@ func runProtocolDemo(client *rpcClient) (Transcript, error) {
 	if err != nil {
 		return Transcript{}, fmt.Errorf("server/discover: %w", err)
 	}
+	if err := decodeCompleteResult(discovery.Result, &struct{}{}); err != nil {
+		return Transcript{}, fmt.Errorf("decode server/discover result: %w", err)
+	}
 
 	toolsListRequest := protocol.Request{
 		JSONRPC: "2.0",
@@ -140,7 +143,7 @@ func runProtocolDemo(client *rpcClient) (Transcript, error) {
 	}
 
 	var listedTools toolsListResult
-	if err := json.Unmarshal(toolsList.Result, &listedTools); err != nil {
+	if err := decodeCompleteResult(toolsList.Result, &listedTools); err != nil {
 		return Transcript{}, fmt.Errorf("decode tools/list result: %w", err)
 	}
 
@@ -167,6 +170,9 @@ func runProtocolDemo(client *rpcClient) (Transcript, error) {
 	if err != nil {
 		return Transcript{}, fmt.Errorf("tools/call: %w", err)
 	}
+	if err := decodeCompleteResult(echoCall.Result, &struct{}{}); err != nil {
+		return Transcript{}, fmt.Errorf("decode tools/call result: %w", err)
+	}
 
 	return Transcript{
 		Discovery:       discovery,
@@ -179,6 +185,26 @@ func runProtocolDemo(client *rpcClient) (Transcript, error) {
 			{Name: "tools/call", Request: echoCallRequest, Response: &echoCall},
 		},
 	}, nil
+}
+
+func decodeCompleteResult(raw json.RawMessage, target any) error {
+	var envelope struct {
+		ResultType string `json:"resultType"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return fmt.Errorf("decode result envelope: %w", err)
+	}
+	resultType := envelope.ResultType
+	if resultType == "" {
+		resultType = protocol.ResultTypeComplete
+	}
+	if resultType != protocol.ResultTypeComplete {
+		return fmt.Errorf("unsupported result type %q", resultType)
+	}
+	if err := json.Unmarshal(raw, target); err != nil {
+		return fmt.Errorf("decode result body: %w", err)
+	}
+	return nil
 }
 
 func clientRequestMeta() protocol.RequestMeta {

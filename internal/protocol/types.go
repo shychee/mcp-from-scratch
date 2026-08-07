@@ -33,7 +33,7 @@ type ResultMeta struct {
 
 // Result contains fields shared by modern MCP results.
 type Result struct {
-	ResultType string     `json:"resultType,omitempty"`
+	ResultType string     `json:"resultType"`
 	Meta       ResultMeta `json:"_meta"`
 }
 

@@ -220,6 +220,18 @@ func TestServer_ListsEchoTool(t *testing.T) {
 	if result.Tools[0].InputSchema["type"] != "object" {
 		t.Fatalf("inputSchema.type = %v, want object", result.Tools[0].InputSchema["type"])
 	}
+
+	var cacheHints struct {
+		TTLMillis  int    `json:"ttlMs"`
+		CacheScope string `json:"cacheScope"`
+	}
+	mustUnmarshalResult(t, response.Result, &cacheHints)
+	if cacheHints.TTLMillis != 300000 {
+		t.Fatalf("ttlMs = %d, want 300000", cacheHints.TTLMillis)
+	}
+	if cacheHints.CacheScope != protocol.CacheScopePublic {
+		t.Fatalf("cacheScope = %q, want public", cacheHints.CacheScope)
+	}
 }
 
 func TestServer_SuccessfulResultsIdentifyServer(t *testing.T) {
@@ -250,6 +262,9 @@ func TestServer_SuccessfulResultsIdentifyServer(t *testing.T) {
 
 			var result protocol.Result
 			mustUnmarshalResult(t, response.Result, &result)
+			if result.ResultType != protocol.ResultTypeComplete {
+				t.Fatalf("resultType = %q, want complete", result.ResultType)
+			}
 			if result.Meta.ServerInfo.Name != "mcp-from-scratch" {
 				t.Fatalf("serverInfo.name = %q, want mcp-from-scratch", result.Meta.ServerInfo.Name)
 			}
@@ -392,6 +407,32 @@ func TestServer_ListsRegisteredTool(t *testing.T) {
 	}
 	if result.Tools[0].Name != "reverse" {
 		t.Fatalf("tool name = %q, want %q", result.Tools[0].Name, "reverse")
+	}
+}
+
+func TestServer_ListsToolsByName(t *testing.T) {
+	t.Parallel()
+
+	response := New(
+		fakeTool{name: "zeta", description: "Last tool."},
+		fakeTool{name: "alpha", description: "First tool."},
+	).Handle(context.Background(), protocol.Request{
+		JSONRPC: "2.0",
+		ID:      protocol.ID(1),
+		Method:  "tools/list",
+		Params:  modernRequestParams(t, `{}`),
+	})
+
+	if response.Error != nil {
+		t.Fatalf("Handle(tools/list) error = %v, want nil", response.Error)
+	}
+	var result toolsListResult
+	mustUnmarshalResult(t, response.Result, &result)
+	if len(result.Tools) != 2 {
+		t.Fatalf("tool count = %d, want 2", len(result.Tools))
+	}
+	if result.Tools[0].Name != "alpha" || result.Tools[1].Name != "zeta" {
+		t.Fatalf("tool names = [%s %s], want [alpha zeta]", result.Tools[0].Name, result.Tools[1].Name)
 	}
 }
 
