@@ -6,10 +6,11 @@
 第一阶段刻意不使用 MCP SDK，让 host 和 server 的边界、JSON-RPC 消息形状、
 stdio 传输方式都保持可见。
 
-它不是完整 MCP 实现。当前里程碑只建模了 JSON-RPC over stdio 的一个很小子集：
+它不是完整 MCP 实现。当前里程碑建模了 MCP `2026-07-28` 在 JSON-RPC over
+stdio 上的一个小型子集：
 
-- `initialize`
-- `notifications/initialized`
+- 无状态 `server/discover`
+- 每个请求携带协议版本、客户端 identity 和客户端 capabilities
 - `tools/list`
 - `tools/call`
 - JSON-RPC parse error、invalid request error、method-not-found error 和
@@ -17,15 +18,15 @@ stdio 传输方式都保持可见。
 
 ## 协议基线
 
-当前可执行代码演示的是 MCP `2025-06-18` 的一个子集。下一阶段目标是迁移到
-`2026-07-28` 协议版本，对应 issue
+项目最初从 MCP `2025-06-18` 的一个子集开始，历史实现保留在 Git 中。当前可执行
+代码已经迁移到 `2026-07-28` 协议版本，对应 issue
 [#10](https://github.com/shychee/mcp-from-scratch/issues/10) 到
 [#24](https://github.com/shychee/mcp-from-scratch/issues/24)。
 
-核心迁移会用无状态 `server/discover` 替代会话初始化，在每个请求中携带协议版本和
-客户端能力，采用带类型、可缓存的结果信封，然后依次实现 MRTR、Streamable HTTP
-和 `subscriptions/listen`。OAuth、Tasks、扩展、trace 和互操作性验证建立在核心协议
-之上，不阻塞核心迁移。
+核心迁移的第一步已经完成：无状态 `server/discover` 已替代会话初始化，每个请求都
+会被独立校验。下一步是完整、可缓存的结果信封，之后依次实现 MRTR、Streamable
+HTTP 和 `subscriptions/listen`。OAuth、Tasks、扩展、trace 和互操作性验证建立在
+核心协议之上，不阻塞核心迁移。
 
 迁移顺序、兼容边界和官方规范链接见
 [学习路线](docs/learning-roadmap.md)。
@@ -48,7 +49,7 @@ cmd/mcp-host
 cmd/mcp-server
   从 stdin 读取 newline-delimited JSON-RPC request
   验证 JSON-RPC envelope
-  处理 initialize、tools/list 和 tools/call
+  处理 server/discover、tools/list 和 tools/call
   向 stdout 写 JSON-RPC response
 ```
 
@@ -61,10 +62,10 @@ make demo
 demo 会打印每一次 request 和 response：
 
 ```text
-=== initialize request ===
+=== server/discover request ===
 { ... }
 
-=== initialize response ===
+=== server/discover response ===
 { ... }
 
 === tools/list request ===
@@ -100,8 +101,10 @@ make test
 - 项目目前用到的 JSON-RPC 标准错误码
 - malformed JSON 和 invalid request envelope 校验
 - 不需要 response 的 JSON-RPC notification
-- 通过 `notifications/initialized` 跟踪 initialize lifecycle
-- 类 MCP 的 `initialize`、`tools/list`、`tools/call` method dispatch
+- 针对 `2026-07-28` 协议版本的无状态 request metadata 校验
+- 带协商数据的标准 `-32022` unsupported-version error
+- `server/discover`、`tools/list`、`tools/call` method dispatch
+- 每个成功结果都携带 server identity metadata
 - `tools/list` 和 `tools/call` 由一个小型 server-side registry 驱动
 - 对 missing、unknown、malformed tool call arguments 做防御性校验
 - host-side tool discovery、fake model tool selection，以及 host/server
@@ -138,6 +141,14 @@ server 暴露了一个玩具工具：
   "id": 3,
   "method": "tools/call",
   "params": {
+    "_meta": {
+      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+      "io.modelcontextprotocol/clientInfo": {
+        "name": "mcp-from-scratch-host",
+        "version": "0.1.0"
+      },
+      "io.modelcontextprotocol/clientCapabilities": {}
+    },
     "name": "echo",
     "arguments": {
       "text": "hello from host"
@@ -153,6 +164,12 @@ server 暴露了一个玩具工具：
   "jsonrpc": "2.0",
   "id": 3,
   "result": {
+    "_meta": {
+      "io.modelcontextprotocol/serverInfo": {
+        "name": "mcp-from-scratch",
+        "version": "0.1.0"
+      }
+    },
     "content": [
       {
         "type": "text",

@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"testing"
 	"time"
+
+	"github.com/shychee/mcp-from-scratch/internal/protocol"
 )
 
 func TestRunDemoTalksToServerProcess(t *testing.T) {
@@ -23,8 +25,8 @@ func TestRunDemoTalksToServerProcess(t *testing.T) {
 		t.Fatalf("RunDemo() error = %v, want nil", err)
 	}
 
-	if transcript.Initialize.Error != nil {
-		t.Fatalf("initialize error = %v, want nil", transcript.Initialize.Error)
+	if transcript.Discovery.Error != nil {
+		t.Fatalf("server/discover error = %v, want nil", transcript.Discovery.Error)
 	}
 	if transcript.ToolsList.Error != nil {
 		t.Fatalf("tools/list error = %v, want nil", transcript.ToolsList.Error)
@@ -32,20 +34,28 @@ func TestRunDemoTalksToServerProcess(t *testing.T) {
 	if transcript.EchoCall.Error != nil {
 		t.Fatalf("tools/call error = %v, want nil", transcript.EchoCall.Error)
 	}
-	if len(transcript.Exchanges) != 4 {
-		t.Fatalf("exchange count = %d, want 4", len(transcript.Exchanges))
+	if len(transcript.Exchanges) != 3 {
+		t.Fatalf("exchange count = %d, want 3", len(transcript.Exchanges))
 	}
-	if transcript.Exchanges[0].Request.Method != "initialize" {
-		t.Fatalf("first exchange method = %q, want initialize", transcript.Exchanges[0].Request.Method)
+	if transcript.Exchanges[0].Request.Method != "server/discover" {
+		t.Fatalf("first exchange method = %q, want server/discover", transcript.Exchanges[0].Request.Method)
 	}
-	if transcript.Exchanges[1].Request.Method != "notifications/initialized" {
-		t.Fatalf("second exchange method = %q, want notifications/initialized", transcript.Exchanges[1].Request.Method)
-	}
-	if transcript.Exchanges[1].Request.ID != nil {
-		t.Fatalf("initialized notification id = %v, want nil", *transcript.Exchanges[1].Request.ID)
-	}
-	if transcript.Exchanges[1].Response != nil {
-		t.Fatalf("initialized notification response = %v, want nil", transcript.Exchanges[1].Response)
+	for _, exchange := range transcript.Exchanges {
+		var params struct {
+			Meta protocol.RequestMeta `json:"_meta"`
+		}
+		if err := json.Unmarshal(exchange.Request.Params, &params); err != nil {
+			t.Fatalf("unmarshal %s request params: %v", exchange.Name, err)
+		}
+		if params.Meta.ProtocolVersion != protocol.Version20260728 {
+			t.Fatalf("%s protocol version = %q, want %s", exchange.Name, params.Meta.ProtocolVersion, protocol.Version20260728)
+		}
+		if params.Meta.ClientInfo == nil || params.Meta.ClientInfo.Name != "mcp-from-scratch-host" {
+			t.Fatalf("%s client info = %#v, want mcp-from-scratch-host", exchange.Name, params.Meta.ClientInfo)
+		}
+		if params.Meta.ClientCapabilities == nil {
+			t.Fatalf("%s client capabilities = nil, want object", exchange.Name)
+		}
 	}
 	if len(transcript.DiscoveredTools) != 1 {
 		t.Fatalf("discovered tool count = %d, want 1", len(transcript.DiscoveredTools))

@@ -37,13 +37,19 @@ type toolsListResult struct {
 	Tools []ToolDescription `json:"tools"`
 }
 
+type toolCallRequestParams struct {
+	Meta      protocol.RequestMeta `json:"_meta"`
+	Name      string               `json:"name"`
+	Arguments json.RawMessage      `json:"arguments"`
+}
+
 type ToolCallDecision struct {
 	ToolName  string
 	Arguments json.RawMessage
 }
 
 type Transcript struct {
-	Initialize      protocol.Response
+	Discovery       protocol.Response
 	ToolsList       protocol.Response
 	EchoCall        protocol.Response
 	Exchanges       []Exchange
@@ -104,29 +110,29 @@ type rpcClient struct {
 }
 
 func runProtocolDemo(client *rpcClient) (Transcript, error) {
-	initializeRequest := protocol.Request{
-		JSONRPC: "2.0",
-		ID:      protocol.ID(1),
-		Method:  "initialize",
-		Params:  json.RawMessage(`{"protocolVersion":"2025-06-18"}`),
-	}
-	initialize, err := client.call(initializeRequest)
+	requestParamsJSON, err := json.Marshal(protocol.RequestParams{
+		Meta: clientRequestMeta(),
+	})
 	if err != nil {
-		return Transcript{}, fmt.Errorf("initialize: %w", err)
+		return Transcript{}, fmt.Errorf("encode request metadata: %w", err)
 	}
 
-	initializedNotification := protocol.Request{
+	discoveryRequest := protocol.Request{
 		JSONRPC: "2.0",
-		Method:  "notifications/initialized",
+		ID:      protocol.ID(1),
+		Method:  "server/discover",
+		Params:  requestParamsJSON,
 	}
-	if err := client.notify(initializedNotification); err != nil {
-		return Transcript{}, fmt.Errorf("notifications/initialized: %w", err)
+	discovery, err := client.call(discoveryRequest)
+	if err != nil {
+		return Transcript{}, fmt.Errorf("server/discover: %w", err)
 	}
 
 	toolsListRequest := protocol.Request{
 		JSONRPC: "2.0",
 		ID:      protocol.ID(2),
 		Method:  "tools/list",
+		Params:  requestParamsJSON,
 	}
 	toolsList, err := client.call(toolsListRequest)
 	if err != nil {
@@ -142,9 +148,10 @@ func runProtocolDemo(client *rpcClient) (Transcript, error) {
 	if err != nil {
 		return Transcript{}, fmt.Errorf("fake model decision: %w", err)
 	}
-	toolCallParams := map[string]any{
-		"name":      decision.ToolName,
-		"arguments": json.RawMessage(decision.Arguments),
+	toolCallParams := toolCallRequestParams{
+		Meta:      clientRequestMeta(),
+		Name:      decision.ToolName,
+		Arguments: decision.Arguments,
 	}
 	toolCallParamsJSON, err := json.Marshal(toolCallParams)
 	if err != nil {
@@ -162,17 +169,27 @@ func runProtocolDemo(client *rpcClient) (Transcript, error) {
 	}
 
 	return Transcript{
-		Initialize:      initialize,
+		Discovery:       discovery,
 		ToolsList:       toolsList,
 		EchoCall:        echoCall,
 		DiscoveredTools: listedTools.Tools,
 		Exchanges: []Exchange{
-			{Name: "initialize", Request: initializeRequest, Response: &initialize},
-			{Name: "notifications/initialized", Request: initializedNotification},
+			{Name: "server/discover", Request: discoveryRequest, Response: &discovery},
 			{Name: "tools/list", Request: toolsListRequest, Response: &toolsList},
 			{Name: "tools/call", Request: echoCallRequest, Response: &echoCall},
 		},
 	}, nil
+}
+
+func clientRequestMeta() protocol.RequestMeta {
+	return protocol.RequestMeta{
+		ProtocolVersion: protocol.Version20260728,
+		ClientInfo: &protocol.Implementation{
+			Name:    "mcp-from-scratch-host",
+			Version: "0.1.0",
+		},
+		ClientCapabilities: map[string]any{},
+	}
 }
 
 func (c *rpcClient) call(request protocol.Request) (protocol.Response, error) {
@@ -185,13 +202,6 @@ func (c *rpcClient) call(request protocol.Request) (protocol.Response, error) {
 		return protocol.Response{}, fmt.Errorf("decode response: %w", err)
 	}
 	return response, nil
-}
-
-func (c *rpcClient) notify(request protocol.Request) error {
-	if err := c.encoder.Encode(request); err != nil {
-		return fmt.Errorf("encode notification: %w", err)
-	}
-	return nil
 }
 
 func openAIToolsFromToolDescriptions(tools []ToolDescription) []openAITool {

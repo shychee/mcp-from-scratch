@@ -8,7 +8,12 @@ import (
 	"github.com/shychee/mcp-from-scratch/internal/protocol"
 )
 
-const protocolVersion = "2025-06-18"
+const (
+	protocolVersion    = protocol.Version20260728
+	discoveryTTLMillis = 60 * 60 * 1000
+	serverName         = "mcp-from-scratch"
+	serverVersion      = "0.1.0"
+)
 
 type Tool interface {
 	Definition() tool
@@ -16,26 +21,26 @@ type Tool interface {
 }
 
 type Server struct {
-	initialized bool
-	tools       []Tool
+	tools []Tool
 }
 
-type initializeResult struct {
-	ProtocolVersion string       `json:"protocolVersion"`
-	ServerInfo      serverInfo   `json:"serverInfo"`
-	Capabilities    capabilities `json:"capabilities"`
-}
-
-type serverInfo struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
+type discoverResult struct {
+	protocol.CacheableResult
+	SupportedVersions []string     `json:"supportedVersions"`
+	Capabilities      capabilities `json:"capabilities"`
 }
 
 type capabilities struct {
 	Tools map[string]any `json:"tools"`
 }
 
+type unsupportedProtocolVersionData struct {
+	Supported []string `json:"supported"`
+	Requested string   `json:"requested"`
+}
+
 type toolsListResult struct {
+	protocol.Result
 	Tools []tool `json:"tools"`
 }
 
@@ -46,6 +51,7 @@ type tool struct {
 }
 
 type toolCallResult struct {
+	protocol.Result
 	Content []contentBlock `json:"content"`
 }
 
@@ -78,15 +84,20 @@ func (s *Server) Handle(_ context.Context, request protocol.Request) protocol.Re
 		JSONRPC: "2.0",
 		ID:      request.ID,
 	}
+	if requestError := validateRequestMetadata(request.Params); requestError != nil {
+		response.Error = requestError
+		return response
+	}
 
 	switch request.Method {
-	case "initialize":
-		response.Result = mustMarshal(initializeResult{
-			ProtocolVersion: protocolVersion,
-			ServerInfo: serverInfo{
-				Name:    "mcp-from-scratch",
-				Version: "0.1.0",
+	case "server/discover":
+		response.Result = mustMarshal(discoverResult{
+			CacheableResult: protocol.CacheableResult{
+				Result:     newResult(protocol.ResultTypeComplete),
+				TTLMillis:  discoveryTTLMillis,
+				CacheScope: protocol.CacheScopePublic,
 			},
+			SupportedVersions: []string{protocolVersion},
 			Capabilities: capabilities{
 				Tools: map[string]any{},
 			},
@@ -97,7 +108,8 @@ func (s *Server) Handle(_ context.Context, request protocol.Request) protocol.Re
 			tools = append(tools, t.Definition())
 		}
 		response.Result = mustMarshal(toolsListResult{
-			Tools: tools,
+			Result: newResult(""),
+			Tools:  tools,
 		})
 	case "tools/call":
 		result, err := s.callTool(request.Params)
@@ -105,14 +117,46 @@ func (s *Server) Handle(_ context.Context, request protocol.Request) protocol.Re
 			response.Error = protocol.NewError(protocol.CodeInvalidParams, err.Error())
 			return response
 		}
+		result.Result = newResult("")
 		response.Result = mustMarshal(result)
-	case "notifications/initialized":
-		s.initialized = true
 	default:
 		response.Error = protocol.NewError(protocol.CodeMethodNotFound, "method not found")
 	}
 
 	return response
+}
+
+func newResult(resultType string) protocol.Result {
+	return protocol.Result{
+		ResultType: resultType,
+		Meta: protocol.ResultMeta{
+			ServerInfo: protocol.Implementation{
+				Name:    serverName,
+				Version: serverVersion,
+			},
+		},
+	}
+}
+
+func validateRequestMetadata(raw json.RawMessage) *protocol.Error {
+	var params protocol.RequestParams
+	if err := json.Unmarshal(raw, &params); err != nil {
+		return protocol.NewError(protocol.CodeInvalidParams, "missing or invalid request metadata")
+	}
+	if params.Meta.ProtocolVersion == "" || params.Meta.ClientCapabilities == nil {
+		return protocol.NewError(protocol.CodeInvalidParams, "missing or invalid request metadata")
+	}
+	if params.Meta.ProtocolVersion != protocolVersion {
+		return protocol.NewErrorWithData(
+			protocol.CodeUnsupportedProtocolVersion,
+			"unsupported protocol version",
+			unsupportedProtocolVersionData{
+				Supported: []string{protocolVersion},
+				Requested: params.Meta.ProtocolVersion,
+			},
+		)
+	}
+	return nil
 }
 
 type echoTool struct{}

@@ -68,7 +68,7 @@ func TestServe_InvalidRequestReturnsInvalidRequestError(t *testing.T) {
 func TestServe_NotificationDoesNotWriteResponse(t *testing.T) {
 	server := New()
 
-	input := strings.NewReader(`{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2025-06-18"}}` + "\n")
+	input := strings.NewReader(`{"jsonrpc":"2.0","method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}` + "\n")
 	var output bytes.Buffer
 
 	err := server.Serve(context.Background(), input, &output)
@@ -81,10 +81,10 @@ func TestServe_NotificationDoesNotWriteResponse(t *testing.T) {
 	}
 }
 
-func TestServe_InitializedNotificationMarksServerInitialized(t *testing.T) {
+func TestServe_RequestDoesNotRequirePriorDiscovery(t *testing.T) {
 	server := New()
 
-	input := strings.NewReader(`{"jsonrpc":"2.0","method":"notifications/initialized"}` + "\n")
+	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}` + "\n")
 	var output bytes.Buffer
 
 	err := server.Serve(context.Background(), input, &output)
@@ -92,10 +92,14 @@ func TestServe_InitializedNotificationMarksServerInitialized(t *testing.T) {
 		t.Fatalf("Serve() error = %v", err)
 	}
 
-	if !server.initialized {
-		t.Fatal("server.initialized = false, want true")
+	var response protocol.Response
+	if err := json.Unmarshal(output.Bytes(), &response); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
 	}
-	if output.Len() != 0 {
-		t.Fatalf("output = %q, want empty", output.String())
+	if response.Error != nil {
+		t.Fatalf("response error = %v, want nil", response.Error)
+	}
+	if len(response.Result) == 0 {
+		t.Fatal("response result is empty")
 	}
 }
