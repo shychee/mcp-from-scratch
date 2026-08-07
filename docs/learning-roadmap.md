@@ -30,6 +30,10 @@ The target changes the project's protocol model in several important ways:
 Primary references:
 
 - [MCP 2026-07-28 specification](https://modelcontextprotocol.io/specification/2026-07-28)
+- [MCP 2026-07-28 key changes](https://modelcontextprotocol.io/specification/2026-07-28/changelog)
+- [Versioning and compatibility](https://modelcontextprotocol.io/specification/2026-07-28/basic/versioning)
+- [`server/discover`](https://modelcontextprotocol.io/specification/2026-07-28/server/discover)
+- [Multi Round-Trip Requests (MRTR)](https://modelcontextprotocol.io/specification/2026-07-28/basic/patterns/mrtr)
 - [MCP 2026-07-28 TypeScript schema](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/schema/2026-07-28/schema.ts)
 - [MCP specification repository](https://github.com/modelcontextprotocol/modelcontextprotocol)
 
