@@ -1,6 +1,51 @@
 package protocol
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"fmt"
+)
+
+const (
+	Version20260728    = "2026-07-28"
+	ResultTypeComplete = "complete"
+	CacheScopePublic   = "public"
+)
+
+// Implementation identifies MCP client or server software.
+type Implementation struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+}
+
+// RequestMeta carries the protocol context required on each modern MCP request.
+type RequestMeta struct {
+	ProtocolVersion    string          `json:"io.modelcontextprotocol/protocolVersion"`
+	ClientInfo         *Implementation `json:"io.modelcontextprotocol/clientInfo,omitempty"`
+	ClientCapabilities map[string]any  `json:"io.modelcontextprotocol/clientCapabilities"`
+}
+
+// RequestParams contains the common fields shared by modern MCP requests.
+type RequestParams struct {
+	Meta RequestMeta `json:"_meta"`
+}
+
+// ResultMeta identifies the server that produced a result.
+type ResultMeta struct {
+	ServerInfo Implementation `json:"io.modelcontextprotocol/serverInfo"`
+}
+
+// Result contains fields shared by modern MCP results.
+type Result struct {
+	ResultType string     `json:"resultType"`
+	Meta       ResultMeta `json:"_meta"`
+}
+
+// CacheableResult adds cache hints to results that can be reused by clients.
+type CacheableResult struct {
+	Result
+	TTLMillis  int    `json:"ttlMs"`
+	CacheScope string `json:"cacheScope"`
+}
 
 // ErrorCode identifies a JSON-RPC 2.0 error condition.
 type ErrorCode int
@@ -12,6 +57,8 @@ const (
 	CodeMethodNotFound ErrorCode = -32601
 	CodeInvalidParams  ErrorCode = -32602
 	CodeInternalError  ErrorCode = -32603
+
+	CodeUnsupportedProtocolVersion ErrorCode = -32022
 )
 
 // Request is the subset of JSON-RPC 2.0 request fields this learning project needs.
@@ -52,6 +99,23 @@ func ID(value int) *int {
 type Error struct {
 	Code    ErrorCode `json:"code"`
 	Message string    `json:"message"`
+	Data    any       `json:"data,omitempty"`
+}
+
+// Error formats the JSON-RPC error without discarding its machine-readable data.
+func (e *Error) Error() string {
+	if e == nil {
+		return "<nil>"
+	}
+	if e.Data == nil {
+		return fmt.Sprintf("JSON-RPC error %d: %s", e.Code, e.Message)
+	}
+
+	data, err := json.Marshal(e.Data)
+	if err != nil {
+		return fmt.Sprintf("JSON-RPC error %d: %s (data: %v)", e.Code, e.Message, e.Data)
+	}
+	return fmt.Sprintf("JSON-RPC error %d: %s (data: %s)", e.Code, e.Message, data)
 }
 
 // NewError creates a JSON-RPC error object.
@@ -59,5 +123,14 @@ func NewError(code ErrorCode, message string) *Error {
 	return &Error{
 		Code:    code,
 		Message: message,
+	}
+}
+
+// NewErrorWithData creates a JSON-RPC error object with machine-readable data.
+func NewErrorWithData(code ErrorCode, message string, data any) *Error {
+	return &Error{
+		Code:    code,
+		Message: message,
+		Data:    data,
 	}
 }

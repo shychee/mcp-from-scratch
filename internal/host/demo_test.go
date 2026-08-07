@@ -1,13 +1,17 @@
 package host
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/shychee/mcp-from-scratch/internal/protocol"
 )
 
 func TestRunDemoTalksToServerProcess(t *testing.T) {
@@ -23,8 +27,8 @@ func TestRunDemoTalksToServerProcess(t *testing.T) {
 		t.Fatalf("RunDemo() error = %v, want nil", err)
 	}
 
-	if transcript.Initialize.Error != nil {
-		t.Fatalf("initialize error = %v, want nil", transcript.Initialize.Error)
+	if transcript.Discovery.Error != nil {
+		t.Fatalf("server/discover error = %v, want nil", transcript.Discovery.Error)
 	}
 	if transcript.ToolsList.Error != nil {
 		t.Fatalf("tools/list error = %v, want nil", transcript.ToolsList.Error)
@@ -32,20 +36,28 @@ func TestRunDemoTalksToServerProcess(t *testing.T) {
 	if transcript.EchoCall.Error != nil {
 		t.Fatalf("tools/call error = %v, want nil", transcript.EchoCall.Error)
 	}
-	if len(transcript.Exchanges) != 4 {
-		t.Fatalf("exchange count = %d, want 4", len(transcript.Exchanges))
+	if len(transcript.Exchanges) != 3 {
+		t.Fatalf("exchange count = %d, want 3", len(transcript.Exchanges))
 	}
-	if transcript.Exchanges[0].Request.Method != "initialize" {
-		t.Fatalf("first exchange method = %q, want initialize", transcript.Exchanges[0].Request.Method)
+	if transcript.Exchanges[0].Request.Method != "server/discover" {
+		t.Fatalf("first exchange method = %q, want server/discover", transcript.Exchanges[0].Request.Method)
 	}
-	if transcript.Exchanges[1].Request.Method != "notifications/initialized" {
-		t.Fatalf("second exchange method = %q, want notifications/initialized", transcript.Exchanges[1].Request.Method)
-	}
-	if transcript.Exchanges[1].Request.ID != nil {
-		t.Fatalf("initialized notification id = %v, want nil", *transcript.Exchanges[1].Request.ID)
-	}
-	if transcript.Exchanges[1].Response != nil {
-		t.Fatalf("initialized notification response = %v, want nil", transcript.Exchanges[1].Response)
+	for _, exchange := range transcript.Exchanges {
+		var params struct {
+			Meta protocol.RequestMeta `json:"_meta"`
+		}
+		if err := json.Unmarshal(exchange.Request.Params, &params); err != nil {
+			t.Fatalf("unmarshal %s request params: %v", exchange.Name, err)
+		}
+		if params.Meta.ProtocolVersion != protocol.Version20260728 {
+			t.Fatalf("%s protocol version = %q, want %s", exchange.Name, params.Meta.ProtocolVersion, protocol.Version20260728)
+		}
+		if params.Meta.ClientInfo == nil || params.Meta.ClientInfo.Name != "mcp-from-scratch-host" {
+			t.Fatalf("%s client info = %#v, want mcp-from-scratch-host", exchange.Name, params.Meta.ClientInfo)
+		}
+		if params.Meta.ClientCapabilities == nil {
+			t.Fatalf("%s client capabilities = nil, want object", exchange.Name)
+		}
 	}
 	if len(transcript.DiscoveredTools) != 1 {
 		t.Fatalf("discovered tool count = %d, want 1", len(transcript.DiscoveredTools))
@@ -137,6 +149,84 @@ func TestFakeModelDecisionChoosesEchoTool(t *testing.T) {
 	}
 	if args.Text != "hello from fake model" {
 		t.Fatalf("argument text = %q, want hello from fake model", args.Text)
+	}
+}
+
+func TestDecodeCompleteResultAcceptsLegacyResultWithoutType(t *testing.T) {
+	t.Parallel()
+
+	var result toolsListResult
+	err := decodeCompleteResult(json.RawMessage(`{"tools":[]}`), &result)
+	if err != nil {
+		t.Fatalf("decodeCompleteResult() error = %v, want nil", err)
+	}
+	if result.Tools == nil {
+		t.Fatal("tools = nil, want decoded empty list")
+	}
+}
+
+func TestDecodeCompleteResultRejectsUnsupportedType(t *testing.T) {
+	t.Parallel()
+
+	err := decodeCompleteResult(json.RawMessage(`{"resultType":"input-required"}`), &struct{}{})
+	if err == nil {
+		t.Fatal("decodeCompleteResult() error = nil, want unsupported result type error")
+	}
+}
+
+func TestDecodeCompleteResultRejectsMalformedEnvelopes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		raw  json.RawMessage
+	}{
+		{name: "null result", raw: json.RawMessage(`null`)},
+		{name: "null result type", raw: json.RawMessage(`{"resultType":null}`)},
+		{name: "empty result type", raw: json.RawMessage(`{"resultType":""}`)},
+		{name: "non-string result type", raw: json.RawMessage(`{"resultType":1}`)},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			if err := decodeCompleteResult(test.raw, &struct{}{}); err == nil {
+				t.Fatal("decodeCompleteResult() error = nil, want malformed envelope error")
+			}
+		})
+	}
+}
+
+func TestRPCClientCallReturnsJSONRPCError(t *testing.T) {
+	t.Parallel()
+
+	var request bytes.Buffer
+	client := rpcClient{
+		encoder: json.NewEncoder(&request),
+		decoder: json.NewDecoder(strings.NewReader(
+			`{"jsonrpc":"2.0","id":1,"error":{"code":-32022,"message":"unsupported protocol version","data":{"requested":"2025-03-26","supported":["2026-07-28"]}}}`,
+		)),
+	}
+
+	response, err := client.call(protocol.Request{
+		JSONRPC: "2.0",
+		ID:      protocol.ID(1),
+		Method:  "tools/list",
+	})
+	if err == nil {
+		t.Fatal("call() error = nil, want JSON-RPC error")
+	}
+	if response.Error == nil {
+		t.Fatal("call() response error = nil, want decoded JSON-RPC error")
+	}
+	if err != response.Error {
+		t.Fatalf("call() error = %T %v, want response error", err, err)
+	}
+	for _, want := range []string{"-32022", "unsupported protocol version", "2025-03-26", "2026-07-28"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("call() error = %q, want substring %q", err, want)
+		}
 	}
 }
 

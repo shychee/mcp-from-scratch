@@ -37,13 +37,19 @@ type toolsListResult struct {
 	Tools []ToolDescription `json:"tools"`
 }
 
+type toolCallRequestParams struct {
+	protocol.RequestParams
+	Name      string          `json:"name"`
+	Arguments json.RawMessage `json:"arguments"`
+}
+
 type ToolCallDecision struct {
 	ToolName  string
 	Arguments json.RawMessage
 }
 
 type Transcript struct {
-	Initialize      protocol.Response
+	Discovery       protocol.Response
 	ToolsList       protocol.Response
 	EchoCall        protocol.Response
 	Exchanges       []Exchange
@@ -104,29 +110,32 @@ type rpcClient struct {
 }
 
 func runProtocolDemo(client *rpcClient) (Transcript, error) {
-	initializeRequest := protocol.Request{
-		JSONRPC: "2.0",
-		ID:      protocol.ID(1),
-		Method:  "initialize",
-		Params:  json.RawMessage(`{"protocolVersion":"2025-06-18"}`),
-	}
-	initialize, err := client.call(initializeRequest)
+	requestParamsJSON, err := json.Marshal(protocol.RequestParams{
+		Meta: clientRequestMeta(),
+	})
 	if err != nil {
-		return Transcript{}, fmt.Errorf("initialize: %w", err)
+		return Transcript{}, fmt.Errorf("encode request metadata: %w", err)
 	}
 
-	initializedNotification := protocol.Request{
+	discoveryRequest := protocol.Request{
 		JSONRPC: "2.0",
-		Method:  "notifications/initialized",
+		ID:      protocol.ID(1),
+		Method:  "server/discover",
+		Params:  requestParamsJSON,
 	}
-	if err := client.notify(initializedNotification); err != nil {
-		return Transcript{}, fmt.Errorf("notifications/initialized: %w", err)
+	discovery, err := client.call(discoveryRequest)
+	if err != nil {
+		return Transcript{}, fmt.Errorf("server/discover: %w", err)
+	}
+	if err := decodeCompleteResult(discovery.Result, &struct{}{}); err != nil {
+		return Transcript{}, fmt.Errorf("decode server/discover result: %w", err)
 	}
 
 	toolsListRequest := protocol.Request{
 		JSONRPC: "2.0",
 		ID:      protocol.ID(2),
 		Method:  "tools/list",
+		Params:  requestParamsJSON,
 	}
 	toolsList, err := client.call(toolsListRequest)
 	if err != nil {
@@ -134,7 +143,7 @@ func runProtocolDemo(client *rpcClient) (Transcript, error) {
 	}
 
 	var listedTools toolsListResult
-	if err := json.Unmarshal(toolsList.Result, &listedTools); err != nil {
+	if err := decodeCompleteResult(toolsList.Result, &listedTools); err != nil {
 		return Transcript{}, fmt.Errorf("decode tools/list result: %w", err)
 	}
 
@@ -142,9 +151,10 @@ func runProtocolDemo(client *rpcClient) (Transcript, error) {
 	if err != nil {
 		return Transcript{}, fmt.Errorf("fake model decision: %w", err)
 	}
-	toolCallParams := map[string]any{
-		"name":      decision.ToolName,
-		"arguments": json.RawMessage(decision.Arguments),
+	toolCallParams := toolCallRequestParams{
+		RequestParams: protocol.RequestParams{Meta: clientRequestMeta()},
+		Name:          decision.ToolName,
+		Arguments:     decision.Arguments,
 	}
 	toolCallParamsJSON, err := json.Marshal(toolCallParams)
 	if err != nil {
@@ -160,19 +170,65 @@ func runProtocolDemo(client *rpcClient) (Transcript, error) {
 	if err != nil {
 		return Transcript{}, fmt.Errorf("tools/call: %w", err)
 	}
+	if err := decodeCompleteResult(echoCall.Result, &struct{}{}); err != nil {
+		return Transcript{}, fmt.Errorf("decode tools/call result: %w", err)
+	}
 
 	return Transcript{
-		Initialize:      initialize,
+		Discovery:       discovery,
 		ToolsList:       toolsList,
 		EchoCall:        echoCall,
 		DiscoveredTools: listedTools.Tools,
 		Exchanges: []Exchange{
-			{Name: "initialize", Request: initializeRequest, Response: &initialize},
-			{Name: "notifications/initialized", Request: initializedNotification},
+			{Name: "server/discover", Request: discoveryRequest, Response: &discovery},
 			{Name: "tools/list", Request: toolsListRequest, Response: &toolsList},
 			{Name: "tools/call", Request: echoCallRequest, Response: &echoCall},
 		},
 	}, nil
+}
+
+func decodeCompleteResult(raw json.RawMessage, target any) error {
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return fmt.Errorf("decode result envelope: %w", err)
+	}
+	if envelope == nil {
+		return fmt.Errorf("decode result envelope: result must be an object")
+	}
+
+	resultType := protocol.ResultTypeComplete
+	if rawResultType, ok := envelope["resultType"]; ok {
+		var decodedResultType any
+		if err := json.Unmarshal(rawResultType, &decodedResultType); err != nil {
+			return fmt.Errorf("decode result envelope: invalid result type: %w", err)
+		}
+		var valid bool
+		resultType, valid = decodedResultType.(string)
+		if !valid {
+			return fmt.Errorf("decode result envelope: result type must be a string")
+		}
+		if resultType == "" {
+			return fmt.Errorf("decode result envelope: result type must not be empty")
+		}
+	}
+	if resultType != protocol.ResultTypeComplete {
+		return fmt.Errorf("unsupported result type %q", resultType)
+	}
+	if err := json.Unmarshal(raw, target); err != nil {
+		return fmt.Errorf("decode result body: %w", err)
+	}
+	return nil
+}
+
+func clientRequestMeta() protocol.RequestMeta {
+	return protocol.RequestMeta{
+		ProtocolVersion: protocol.Version20260728,
+		ClientInfo: &protocol.Implementation{
+			Name:    "mcp-from-scratch-host",
+			Version: "0.1.0",
+		},
+		ClientCapabilities: map[string]any{},
+	}
 }
 
 func (c *rpcClient) call(request protocol.Request) (protocol.Response, error) {
@@ -184,14 +240,10 @@ func (c *rpcClient) call(request protocol.Request) (protocol.Response, error) {
 	if err := c.decoder.Decode(&response); err != nil {
 		return protocol.Response{}, fmt.Errorf("decode response: %w", err)
 	}
-	return response, nil
-}
-
-func (c *rpcClient) notify(request protocol.Request) error {
-	if err := c.encoder.Encode(request); err != nil {
-		return fmt.Errorf("encode notification: %w", err)
+	if response.Error != nil {
+		return response, response.Error
 	}
-	return nil
+	return response, nil
 }
 
 func openAIToolsFromToolDescriptions(tools []ToolDescription) []openAITool {
