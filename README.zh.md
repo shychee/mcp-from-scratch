@@ -15,6 +15,21 @@ stdio 传输方式都保持可见。
 - JSON-RPC parse error、invalid request error、method-not-found error 和
   invalid-params error
 
+## 协议基线
+
+当前可执行代码演示的是 MCP `2025-06-18` 的一个子集。下一阶段目标是迁移到
+`2026-07-28` 协议版本，对应 issue
+[#10](https://github.com/shychee/mcp-from-scratch/issues/10) 到
+[#24](https://github.com/shychee/mcp-from-scratch/issues/24)。
+
+核心迁移会用无状态 `server/discover` 替代会话初始化，在每个请求中携带协议版本和
+客户端能力，采用带类型、可缓存的结果信封，然后依次实现 MRTR、Streamable HTTP
+和 `subscriptions/listen`。OAuth、Tasks、扩展、trace 和互操作性验证建立在核心协议
+之上，不阻塞核心迁移。
+
+迁移顺序、兼容边界和官方规范链接见
+[学习路线](docs/learning-roadmap.md)。
+
 ## 心智模型
 
 一个 agent 工具集成里有两个不同角色：

@@ -16,6 +16,22 @@ subset of JSON-RPC over stdio:
 - JSON-RPC parse errors, invalid request errors, method-not-found errors, and
   invalid-params errors
 
+## Protocol Baseline
+
+The executable code currently demonstrates a subset of MCP `2025-06-18`. The
+next target is the `2026-07-28` protocol revision, tracked in issues
+[#10](https://github.com/shychee/mcp-from-scratch/issues/10) through
+[#24](https://github.com/shychee/mcp-from-scratch/issues/24).
+
+The core migration replaces session initialization with stateless
+`server/discover`, carries protocol version and client capabilities on every
+request, adopts typed and cacheable result envelopes, then adds MRTR,
+Streamable HTTP, and `subscriptions/listen`. OAuth, Tasks, extensions, tracing,
+and interoperability work build on that core instead of blocking it.
+
+See [the learning roadmap](docs/learning-roadmap.md) for the ordered migration,
+compatibility boundaries, and links to the official specification.
+
 ## Mental Model
 
 An agent integration has two different jobs:
