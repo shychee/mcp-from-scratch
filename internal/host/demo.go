@@ -38,9 +38,9 @@ type toolsListResult struct {
 }
 
 type toolCallRequestParams struct {
-	Meta      protocol.RequestMeta `json:"_meta"`
-	Name      string               `json:"name"`
-	Arguments json.RawMessage      `json:"arguments"`
+	protocol.RequestParams
+	Name      string          `json:"name"`
+	Arguments json.RawMessage `json:"arguments"`
 }
 
 type ToolCallDecision struct {
@@ -152,9 +152,9 @@ func runProtocolDemo(client *rpcClient) (Transcript, error) {
 		return Transcript{}, fmt.Errorf("fake model decision: %w", err)
 	}
 	toolCallParams := toolCallRequestParams{
-		Meta:      clientRequestMeta(),
-		Name:      decision.ToolName,
-		Arguments: decision.Arguments,
+		RequestParams: protocol.RequestParams{Meta: clientRequestMeta()},
+		Name:          decision.ToolName,
+		Arguments:     decision.Arguments,
 	}
 	toolCallParamsJSON, err := json.Marshal(toolCallParams)
 	if err != nil {
