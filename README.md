@@ -12,6 +12,7 @@ subset of MCP `2026-07-28` over JSON-RPC and stdio:
 - stateless `server/discover`
 - protocol version, client identity, and client capabilities on every request
 - complete result envelopes, with cache hints on discovery and list results
+- one stateless MRTR form-elicitation flow with integrity-checked request state
 - `tools/list`
 - `tools/call`
 - JSON-RPC parse errors, invalid request errors, method-not-found errors, and
@@ -25,11 +26,14 @@ tracked in issues
 [#10](https://github.com/shychee/mcp-from-scratch/issues/10) through
 [#24](https://github.com/shychee/mcp-from-scratch/issues/24).
 
-The first two core steps are complete: session initialization has been replaced
+The first three core steps are complete: session initialization has been replaced
 by stateless `server/discover`, every request is validated independently, and
-successful responses use complete result envelopes. MRTR is next, followed by
-Streamable HTTP and `subscriptions/listen`. OAuth, Tasks, extensions, tracing,
-and interoperability work build on that core instead of blocking it.
+successful responses use complete result envelopes. The `confirm_preview` tool
+demonstrates MRTR by returning an embedded `elicitation/create` input request,
+then completing when the host retries with the exact request state and explicit
+input response. Streamable HTTP and `subscriptions/listen` are next. OAuth,
+Tasks, extensions, tracing, and interoperability work build on that core instead
+of blocking it.
 
 See [the learning roadmap](docs/learning-roadmap.md) for the ordered migration,
 compatibility boundaries, and links to the official specification.
@@ -55,6 +59,7 @@ cmd/mcp-server
   reads newline-delimited JSON-RPC requests from stdin
   validates the JSON-RPC envelope
   handles server/discover, tools/list, and tools/call
+  returns an input_required result when confirm_preview needs user input
   writes JSON-RPC responses to stdout
 ```
 
@@ -84,6 +89,18 @@ The demo prints each request and response:
 
 === tools/call response ===
 { ... }
+
+=== confirm_preview input required request ===
+{ ... }
+
+=== confirm_preview input required response ===
+{ ... "resultType": "input_required" ... }
+
+=== confirm_preview retry request ===
+{ ... "inputResponses": { ... }, "requestState": "..." ... }
+
+=== confirm_preview retry response ===
+{ ... "resultType": "complete" ... }
 ```
 
 ## Test It
@@ -114,6 +131,12 @@ This project currently implements a deliberately small JSON-RPC model:
 - public cache hints for discovery and tool-list results
 - deterministic tool-list ordering by tool name
 - host compatibility with legacy successful results that omit `resultType`
+- `resultType: input_required` with an embedded form-mode
+  `elicitation/create` request
+- capability-gated elicitation and a retry with a new JSON-RPC ID,
+  `inputResponses`, and an unchanged opaque `requestState`
+- process-independent request-state validation bound to the tool name and
+  preview arguments, without hidden server session state
 - tool descriptions and calls backed by a small server-side registry
 - defensive validation for missing, unknown, and malformed tool call arguments
 - host-side tool discovery, fake model tool selection, and a transcript of
@@ -123,7 +146,16 @@ It does not yet implement full JSON Schema validation or a real model adapter.
 
 ## Current Tool
 
-The server exposes one toy tool:
+The server exposes two toy tools. `echo` returns text directly. `confirm_preview`
+returns an inert preview only after an MRTR confirmation round.
+
+The request-state HMAC key compiled into this learning demo only makes the
+stateless integrity check visible and repeatable across server instances. It is
+not a production secret or security boundary. A real deployment must inject and
+rotate a protected key, and should bind state to an authenticated principal,
+expiry, and originating request.
+
+The `echo` definition is:
 
 ```json
 {

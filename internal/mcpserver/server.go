@@ -19,7 +19,7 @@ const (
 
 type Tool interface {
 	Definition() tool
-	Call(json.RawMessage) (toolCallResult, error)
+	Call(toolCallInvocation) (toolCallResult, error)
 }
 
 type Server struct {
@@ -54,7 +54,9 @@ type tool struct {
 
 type toolCallResult struct {
 	protocol.Result
-	Content []contentBlock `json:"content"`
+	Content       []contentBlock          `json:"content,omitempty"`
+	InputRequests map[string]inputRequest `json:"inputRequests,omitempty"`
+	RequestState  string                  `json:"requestState,omitempty"`
 }
 
 type contentBlock struct {
@@ -63,8 +65,18 @@ type contentBlock struct {
 }
 
 type toolCallParams struct {
-	Name      string          `json:"name"`
-	Arguments json.RawMessage `json:"arguments"`
+	protocol.RequestParams
+	Name           string                     `json:"name"`
+	Arguments      json.RawMessage            `json:"arguments"`
+	InputResponses map[string]json.RawMessage `json:"inputResponses,omitempty"`
+	RequestState   string                     `json:"requestState,omitempty"`
+}
+
+type toolCallInvocation struct {
+	Arguments          json.RawMessage
+	InputResponses     map[string]json.RawMessage
+	RequestState       string
+	ClientCapabilities map[string]any
 }
 
 type echoArguments struct {
@@ -73,7 +85,7 @@ type echoArguments struct {
 
 func New(tools ...Tool) *Server {
 	if len(tools) == 0 {
-		tools = []Tool{echoTool{}}
+		tools = []Tool{echoTool{}, confirmPreviewTool{}}
 	}
 	return &Server{
 		tools: tools,
@@ -126,7 +138,10 @@ func (s *Server) Handle(_ context.Context, request protocol.Request) protocol.Re
 			response.Error = protocol.NewError(protocol.CodeInvalidParams, err.Error())
 			return response
 		}
-		result.Result = newResult()
+		if result.ResultType == "" {
+			result.ResultType = protocol.ResultTypeComplete
+		}
+		result.Meta = newResult().Meta
 		response.Result = mustMarshal(result)
 	default:
 		response.Error = protocol.NewError(protocol.CodeMethodNotFound, "method not found")
@@ -187,9 +202,9 @@ func (echoTool) Definition() tool {
 	}
 }
 
-func (echoTool) Call(raw json.RawMessage) (toolCallResult, error) {
+func (echoTool) Call(invocation toolCallInvocation) (toolCallResult, error) {
 	var args echoArguments
-	if err := json.Unmarshal(raw, &args); err != nil {
+	if err := json.Unmarshal(invocation.Arguments, &args); err != nil {
 		return toolCallResult{}, fmt.Errorf("decode echo arguments: %w", err)
 	}
 	return toolCallResult{
@@ -217,7 +232,12 @@ func (s *Server) callTool(raw json.RawMessage) (toolCallResult, error) {
 			if err := validateToolArguments(definition, params.Arguments); err != nil {
 				return toolCallResult{}, err
 			}
-			return registeredTool.Call(params.Arguments)
+			return registeredTool.Call(toolCallInvocation{
+				Arguments:          params.Arguments,
+				InputResponses:     params.InputResponses,
+				RequestState:       params.RequestState,
+				ClientCapabilities: params.Meta.ClientCapabilities,
+			})
 		}
 	}
 

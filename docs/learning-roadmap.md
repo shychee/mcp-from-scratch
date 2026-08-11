@@ -43,7 +43,7 @@ Primary references:
 
 1. [x] [#11 Replace initialization with stateless discovery](https://github.com/shychee/mcp-from-scratch/issues/11)
 2. [x] [#12 Adopt complete and cacheable result envelopes](https://github.com/shychee/mcp-from-scratch/issues/12)
-3. [ ] [#13 Implement one stateless MRTR elicitation flow](https://github.com/shychee/mcp-from-scratch/issues/13)
+3. [x] [#13 Implement one stateless MRTR elicitation flow](https://github.com/shychee/mcp-from-scratch/issues/13)
 4. [ ] [#14 Add a stateless Streamable HTTP tool-call path](https://github.com/shychee/mcp-from-scratch/issues/14)
 5. [ ] [#15 Deliver tool list changes through subscriptions/listen](https://github.com/shychee/mcp-from-scratch/issues/15)
 

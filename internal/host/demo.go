@@ -39,8 +39,10 @@ type toolsListResult struct {
 
 type toolCallRequestParams struct {
 	protocol.RequestParams
-	Name      string          `json:"name"`
-	Arguments json.RawMessage `json:"arguments"`
+	Name           string                     `json:"name"`
+	Arguments      json.RawMessage            `json:"arguments"`
+	InputResponses map[string]json.RawMessage `json:"inputResponses,omitempty"`
+	RequestState   string                     `json:"requestState,omitempty"`
 }
 
 type ToolCallDecision struct {
@@ -49,11 +51,20 @@ type ToolCallDecision struct {
 }
 
 type Transcript struct {
-	Discovery       protocol.Response
-	ToolsList       protocol.Response
-	EchoCall        protocol.Response
-	Exchanges       []Exchange
-	DiscoveredTools []ToolDescription
+	Discovery            protocol.Response
+	ToolsList            protocol.Response
+	EchoCall             protocol.Response
+	PreviewInputRequired protocol.Response
+	PreviewConfirmation  protocol.Response
+	Exchanges            []Exchange
+	DiscoveredTools      []ToolDescription
+}
+
+type inputRequiredResult struct {
+	InputRequests map[string]struct {
+		Method string `json:"method"`
+	} `json:"inputRequests"`
+	RequestState string `json:"requestState"`
 }
 
 type Exchange struct {
@@ -174,15 +185,85 @@ func runProtocolDemo(client *rpcClient) (Transcript, error) {
 		return Transcript{}, fmt.Errorf("decode tools/call result: %w", err)
 	}
 
+	previewArguments, err := json.Marshal(map[string]string{
+		"preview": "archive demo preview",
+	})
+	if err != nil {
+		return Transcript{}, fmt.Errorf("encode confirm_preview arguments: %w", err)
+	}
+	previewRequestParams := toolCallRequestParams{
+		RequestParams: protocol.RequestParams{Meta: clientRequestMeta()},
+		Name:          "confirm_preview",
+		Arguments:     previewArguments,
+	}
+	previewRequestParamsJSON, err := json.Marshal(previewRequestParams)
+	if err != nil {
+		return Transcript{}, fmt.Errorf("encode initial confirm_preview params: %w", err)
+	}
+	previewRequest := protocol.Request{
+		JSONRPC: "2.0",
+		ID:      protocol.ID(4),
+		Method:  "tools/call",
+		Params:  previewRequestParamsJSON,
+	}
+	previewInputRequired, err := client.call(previewRequest)
+	if err != nil {
+		return Transcript{}, fmt.Errorf("initial confirm_preview call: %w", err)
+	}
+	var required inputRequiredResult
+	if err := decodeInputRequiredResult(previewInputRequired.Result, &required); err != nil {
+		return Transcript{}, fmt.Errorf("decode confirm_preview input-required result: %w", err)
+	}
+	inputRequest, ok := required.InputRequests["confirm_preview"]
+	if !ok || inputRequest.Method != "elicitation/create" {
+		return Transcript{}, fmt.Errorf("confirm_preview did not request elicitation/create")
+	}
+
+	confirmationResponse, err := json.Marshal(map[string]any{
+		"action": "accept",
+		"content": map[string]bool{
+			"confirm": true,
+		},
+	})
+	if err != nil {
+		return Transcript{}, fmt.Errorf("encode confirm_preview input response: %w", err)
+	}
+	previewRetryParams := previewRequestParams
+	previewRetryParams.InputResponses = map[string]json.RawMessage{
+		"confirm_preview": confirmationResponse,
+	}
+	previewRetryParams.RequestState = required.RequestState
+	previewRetryParamsJSON, err := json.Marshal(previewRetryParams)
+	if err != nil {
+		return Transcript{}, fmt.Errorf("encode confirm_preview retry params: %w", err)
+	}
+	previewRetryRequest := protocol.Request{
+		JSONRPC: "2.0",
+		ID:      protocol.ID(5),
+		Method:  "tools/call",
+		Params:  previewRetryParamsJSON,
+	}
+	previewConfirmation, err := client.call(previewRetryRequest)
+	if err != nil {
+		return Transcript{}, fmt.Errorf("retry confirm_preview call: %w", err)
+	}
+	if err := decodeCompleteResult(previewConfirmation.Result, &struct{}{}); err != nil {
+		return Transcript{}, fmt.Errorf("decode confirm_preview result: %w", err)
+	}
+
 	return Transcript{
-		Discovery:       discovery,
-		ToolsList:       toolsList,
-		EchoCall:        echoCall,
-		DiscoveredTools: listedTools.Tools,
+		Discovery:            discovery,
+		ToolsList:            toolsList,
+		EchoCall:             echoCall,
+		PreviewInputRequired: previewInputRequired,
+		PreviewConfirmation:  previewConfirmation,
+		DiscoveredTools:      listedTools.Tools,
 		Exchanges: []Exchange{
 			{Name: "server/discover", Request: discoveryRequest, Response: &discovery},
 			{Name: "tools/list", Request: toolsListRequest, Response: &toolsList},
 			{Name: "tools/call", Request: echoCallRequest, Response: &echoCall},
+			{Name: "confirm_preview input required", Request: previewRequest, Response: &previewInputRequired},
+			{Name: "confirm_preview retry", Request: previewRetryRequest, Response: &previewConfirmation},
 		},
 	}, nil
 }
@@ -220,6 +301,22 @@ func decodeCompleteResult(raw json.RawMessage, target any) error {
 	return nil
 }
 
+func decodeInputRequiredResult(raw json.RawMessage, target any) error {
+	var envelope struct {
+		ResultType string `json:"resultType"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return fmt.Errorf("decode result envelope: %w", err)
+	}
+	if envelope.ResultType != protocol.ResultTypeInputRequired {
+		return fmt.Errorf("unexpected result type %q", envelope.ResultType)
+	}
+	if err := json.Unmarshal(raw, target); err != nil {
+		return fmt.Errorf("decode result body: %w", err)
+	}
+	return nil
+}
+
 func clientRequestMeta() protocol.RequestMeta {
 	return protocol.RequestMeta{
 		ProtocolVersion: protocol.Version20260728,
@@ -227,7 +324,11 @@ func clientRequestMeta() protocol.RequestMeta {
 			Name:    "mcp-from-scratch-host",
 			Version: "0.1.0",
 		},
-		ClientCapabilities: map[string]any{},
+		ClientCapabilities: map[string]any{
+			"elicitation": map[string]any{
+				"form": map[string]any{},
+			},
+		},
 	}
 }
 

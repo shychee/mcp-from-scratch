@@ -36,8 +36,14 @@ func TestRunDemoTalksToServerProcess(t *testing.T) {
 	if transcript.EchoCall.Error != nil {
 		t.Fatalf("tools/call error = %v, want nil", transcript.EchoCall.Error)
 	}
-	if len(transcript.Exchanges) != 3 {
-		t.Fatalf("exchange count = %d, want 3", len(transcript.Exchanges))
+	if transcript.PreviewInputRequired.Error != nil {
+		t.Fatalf("confirm_preview initial error = %v, want nil", transcript.PreviewInputRequired.Error)
+	}
+	if transcript.PreviewConfirmation.Error != nil {
+		t.Fatalf("confirm_preview retry error = %v, want nil", transcript.PreviewConfirmation.Error)
+	}
+	if len(transcript.Exchanges) != 5 {
+		t.Fatalf("exchange count = %d, want 5", len(transcript.Exchanges))
 	}
 	if transcript.Exchanges[0].Request.Method != "server/discover" {
 		t.Fatalf("first exchange method = %q, want server/discover", transcript.Exchanges[0].Request.Method)
@@ -59,11 +65,11 @@ func TestRunDemoTalksToServerProcess(t *testing.T) {
 			t.Fatalf("%s client capabilities = nil, want object", exchange.Name)
 		}
 	}
-	if len(transcript.DiscoveredTools) != 1 {
-		t.Fatalf("discovered tool count = %d, want 1", len(transcript.DiscoveredTools))
+	if len(transcript.DiscoveredTools) != 2 {
+		t.Fatalf("discovered tool count = %d, want 2", len(transcript.DiscoveredTools))
 	}
-	if transcript.DiscoveredTools[0].Name != "echo" {
-		t.Fatalf("discovered tool name = %q, want echo", transcript.DiscoveredTools[0].Name)
+	if transcript.DiscoveredTools[0].Name != "confirm_preview" || transcript.DiscoveredTools[1].Name != "echo" {
+		t.Fatalf("discovered tool names = [%s %s], want [confirm_preview echo]", transcript.DiscoveredTools[0].Name, transcript.DiscoveredTools[1].Name)
 	}
 
 	var echo struct {
@@ -80,6 +86,49 @@ func TestRunDemoTalksToServerProcess(t *testing.T) {
 	}
 	if echo.Content[0].Text != "hello from fake model" {
 		t.Fatalf("echo text = %q, want hello from fake model", echo.Content[0].Text)
+	}
+
+	var required struct {
+		ResultType   string `json:"resultType"`
+		RequestState string `json:"requestState"`
+	}
+	if err := json.Unmarshal(transcript.PreviewInputRequired.Result, &required); err != nil {
+		t.Fatalf("unmarshal input-required result: %v", err)
+	}
+	if required.ResultType != protocol.ResultTypeInputRequired || required.RequestState == "" {
+		t.Fatalf("input-required result = %#v, want input_required with state", required)
+	}
+
+	initialRequest := transcript.Exchanges[3].Request
+	retryRequest := transcript.Exchanges[4].Request
+	if initialRequest.ID == nil || retryRequest.ID == nil || *initialRequest.ID == *retryRequest.ID {
+		t.Fatalf("MRTR request IDs = %v and %v, want different IDs", initialRequest.ID, retryRequest.ID)
+	}
+	var retryParams struct {
+		RequestState string                     `json:"requestState"`
+		Responses    map[string]json.RawMessage `json:"inputResponses"`
+	}
+	if err := json.Unmarshal(retryRequest.Params, &retryParams); err != nil {
+		t.Fatalf("unmarshal confirm_preview retry params: %v", err)
+	}
+	if retryParams.RequestState != required.RequestState {
+		t.Fatalf("retry requestState = %q, want exact input-required state", retryParams.RequestState)
+	}
+	if _, ok := retryParams.Responses["confirm_preview"]; !ok {
+		t.Fatalf("retry inputResponses = %#v, want confirm_preview", retryParams.Responses)
+	}
+
+	var confirmed struct {
+		ResultType string `json:"resultType"`
+		Content    []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(transcript.PreviewConfirmation.Result, &confirmed); err != nil {
+		t.Fatalf("unmarshal confirmation result: %v", err)
+	}
+	if confirmed.ResultType != protocol.ResultTypeComplete || len(confirmed.Content) != 1 {
+		t.Fatalf("confirmation result = %#v, want complete content", confirmed)
 	}
 }
 

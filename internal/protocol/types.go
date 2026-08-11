@@ -6,9 +6,10 @@ import (
 )
 
 const (
-	Version20260728    = "2026-07-28"
-	ResultTypeComplete = "complete"
-	CacheScopePublic   = "public"
+	Version20260728         = "2026-07-28"
+	ResultTypeComplete      = "complete"
+	ResultTypeInputRequired = "input_required"
+	CacheScopePublic        = "public"
 )
 
 // Implementation identifies MCP client or server software.
