@@ -28,7 +28,7 @@ func (t *schemaValidatedTool) Definition() tool {
 	}
 }
 
-func (t *schemaValidatedTool) Call(_ json.RawMessage) (toolCallResult, error) {
+func (t *schemaValidatedTool) Call(_ toolCallInvocation) (toolCallResult, error) {
 	t.called = true
 	return toolCallResult{}, nil
 }
@@ -80,6 +80,9 @@ func TestServer_DiscoverReturnsSupportedVersionAndServerInfo(t *testing.T) {
 	}
 	if result.Capabilities.Tools == nil {
 		t.Fatal("capabilities.tools = nil, want object")
+	}
+	if result.Capabilities.Tools["listChanged"] != true {
+		t.Fatalf("capabilities.tools.listChanged = %v, want true", result.Capabilities.Tools["listChanged"])
 	}
 	if result.TTLMillis != 3600000 {
 		t.Fatalf("ttlMs = %d, want 3600000", result.TTLMillis)
@@ -193,7 +196,7 @@ func TestServer_LegacyInitializeIsNotAvailable(t *testing.T) {
 	}
 }
 
-func TestServer_ListsEchoTool(t *testing.T) {
+func TestServer_ListsDefaultTools(t *testing.T) {
 	t.Parallel()
 
 	server := New()
@@ -211,14 +214,14 @@ func TestServer_ListsEchoTool(t *testing.T) {
 	var result toolsListResult
 	mustUnmarshalResult(t, response.Result, &result)
 
-	if len(result.Tools) != 1 {
-		t.Fatalf("tool count = %d, want 1", len(result.Tools))
+	if len(result.Tools) != 2 {
+		t.Fatalf("tool count = %d, want 2", len(result.Tools))
 	}
-	if result.Tools[0].Name != "echo" {
-		t.Fatalf("tool name = %q, want %q", result.Tools[0].Name, "echo")
+	if result.Tools[0].Name != "confirm_preview" || result.Tools[1].Name != "echo" {
+		t.Fatalf("tool names = [%s %s], want [confirm_preview echo]", result.Tools[0].Name, result.Tools[1].Name)
 	}
-	if result.Tools[0].InputSchema["type"] != "object" {
-		t.Fatalf("inputSchema.type = %v, want object", result.Tools[0].InputSchema["type"])
+	if result.Tools[1].InputSchema["type"] != "object" {
+		t.Fatalf("echo inputSchema.type = %v, want object", result.Tools[1].InputSchema["type"])
 	}
 
 	var cacheHints struct {
@@ -301,6 +304,215 @@ func TestServer_CallsEchoTool(t *testing.T) {
 	}
 }
 
+func TestServer_ConfirmPreviewReturnsInputRequiredAndFreshRetryCompletes(t *testing.T) {
+	t.Parallel()
+
+	initial := New().Handle(context.Background(), protocol.Request{
+		JSONRPC: "2.0",
+		ID:      protocol.ID(10),
+		Method:  "tools/call",
+		Params:  confirmPreviewRequestParams(t, "delete demo item", "", false),
+	})
+	if initial.Error != nil {
+		t.Fatalf("initial confirm_preview error = %v, want nil", initial.Error)
+	}
+
+	var required struct {
+		ResultType    string `json:"resultType"`
+		InputRequests map[string]struct {
+			Method string `json:"method"`
+			Params struct {
+				Mode            string         `json:"mode"`
+				Message         string         `json:"message"`
+				RequestedSchema map[string]any `json:"requestedSchema"`
+			} `json:"params"`
+		} `json:"inputRequests"`
+		RequestState string `json:"requestState"`
+	}
+	mustUnmarshalResult(t, initial.Result, &required)
+	if required.ResultType != "input_required" {
+		t.Fatalf("resultType = %q, want input_required", required.ResultType)
+	}
+	request, ok := required.InputRequests["confirm_preview"]
+	if !ok || len(required.InputRequests) != 1 {
+		t.Fatalf("inputRequests = %#v, want only confirm_preview", required.InputRequests)
+	}
+	if request.Method != "elicitation/create" {
+		t.Fatalf("input request method = %q, want elicitation/create", request.Method)
+	}
+	if request.Params.Mode != "form" || request.Params.Message == "" {
+		t.Fatalf("input request params = %#v, want form message", request.Params)
+	}
+	if request.Params.RequestedSchema["type"] != "object" {
+		t.Fatalf("requestedSchema.type = %v, want object", request.Params.RequestedSchema["type"])
+	}
+	properties, ok := request.Params.RequestedSchema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("requestedSchema.properties = %T, want object", request.Params.RequestedSchema["properties"])
+	}
+	confirm, ok := properties["confirm"].(map[string]any)
+	if !ok || confirm["type"] != "boolean" {
+		t.Fatalf("requestedSchema.properties.confirm = %#v, want boolean", properties["confirm"])
+	}
+	if required.RequestState == "" {
+		t.Fatal("requestState is empty, want opaque state")
+	}
+
+	retry := New().Handle(context.Background(), protocol.Request{
+		JSONRPC: "2.0",
+		ID:      protocol.ID(11),
+		Method:  "tools/call",
+		Params:  confirmPreviewRequestParams(t, "delete demo item", required.RequestState, true),
+	})
+	if retry.Error != nil {
+		t.Fatalf("fresh confirm_preview retry error = %v, want nil", retry.Error)
+	}
+	var result struct {
+		ResultType string `json:"resultType"`
+		Content    []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	mustUnmarshalResult(t, retry.Result, &result)
+	if result.ResultType != protocol.ResultTypeComplete {
+		t.Fatalf("retry resultType = %q, want complete", result.ResultType)
+	}
+	if len(result.Content) != 1 || result.Content[0].Text == "" {
+		t.Fatalf("retry content = %#v, want confirmed action result", result.Content)
+	}
+}
+
+func TestServer_ConfirmPreviewRequiresFormCapability(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		capabilities map[string]any
+	}{
+		{name: "missing elicitation", capabilities: map[string]any{}},
+		{name: "url only", capabilities: map[string]any{
+			"elicitation": map[string]any{"url": map[string]any{}},
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			response := New().Handle(context.Background(), protocol.Request{
+				JSONRPC: "2.0",
+				ID:      protocol.ID(12),
+				Method:  "tools/call",
+				Params: modernRequestParamsWithCapabilities(
+					t,
+					`{"name":"confirm_preview","arguments":{"preview":"delete demo item"}}`,
+					tt.capabilities,
+				),
+			})
+			if response.Error == nil {
+				t.Fatal("confirm_preview without form capability error = nil, want protocol error")
+			}
+			if response.Error.Code != protocol.CodeMissingRequiredClientCapability {
+				t.Fatalf("error code = %d, want %d", response.Error.Code, protocol.CodeMissingRequiredClientCapability)
+			}
+			if len(response.Result) != 0 {
+				t.Fatalf("confirm_preview without form capability result = %s, want empty", response.Result)
+			}
+		})
+	}
+}
+
+func TestServer_ConfirmPreviewHandlesElicitationOutcomes(t *testing.T) {
+	t.Parallel()
+
+	initial := New().Handle(context.Background(), protocol.Request{
+		JSONRPC: "2.0",
+		ID:      protocol.ID(15),
+		Method:  "tools/call",
+		Params:  confirmPreviewRequestParams(t, "demo preview", "", false),
+	})
+	var required struct {
+		RequestState string `json:"requestState"`
+	}
+	mustUnmarshalResult(t, initial.Result, &required)
+
+	tests := []struct {
+		name    string
+		action  string
+		confirm bool
+		want    string
+	}{
+		{name: "accept false", action: "accept", want: "preview was not confirmed"},
+		{name: "decline", action: "decline", want: "preview declined"},
+		{name: "cancel", action: "cancel", want: "preview canceled"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			response := New().Handle(context.Background(), protocol.Request{
+				JSONRPC: "2.0",
+				ID:      protocol.ID(16),
+				Method:  "tools/call",
+				Params:  confirmPreviewOutcomeParams(t, "demo preview", required.RequestState, tt.action, tt.confirm),
+			})
+			if response.Error != nil {
+				t.Fatalf("outcome error = %v", response.Error)
+			}
+			var result struct {
+				Content []contentBlock `json:"content"`
+			}
+			mustUnmarshalResult(t, response.Result, &result)
+			if len(result.Content) != 1 || result.Content[0].Text != tt.want {
+				t.Fatalf("content = %#v, want %q", result.Content, tt.want)
+			}
+		})
+	}
+}
+
+func TestServer_ConfirmPreviewRejectsInvalidRequestStateWithoutActionResult(t *testing.T) {
+	t.Parallel()
+
+	initial := New().Handle(context.Background(), protocol.Request{
+		JSONRPC: "2.0",
+		ID:      protocol.ID(13),
+		Method:  "tools/call",
+		Params:  confirmPreviewRequestParams(t, "delete demo item", "", false),
+	})
+	var required struct {
+		RequestState string `json:"requestState"`
+	}
+	mustUnmarshalResult(t, initial.Result, &required)
+
+	tests := []struct {
+		name            string
+		preview         string
+		requestState    string
+		includeResponse bool
+	}{
+		{name: "missing state", preview: "delete demo item", includeResponse: true},
+		{name: "tampered state", preview: "delete demo item", requestState: "tampered", includeResponse: true},
+		{name: "modified preview", preview: "delete another item", requestState: required.RequestState, includeResponse: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			response := New().Handle(context.Background(), protocol.Request{
+				JSONRPC: "2.0",
+				ID:      protocol.ID(14),
+				Method:  "tools/call",
+				Params:  confirmPreviewRequestParams(t, tt.preview, tt.requestState, tt.includeResponse),
+			})
+			if response.Error == nil {
+				t.Fatal("invalid requestState error = nil, want protocol error")
+			}
+			if response.Error.Code != protocol.CodeInvalidParams {
+				t.Fatalf("error code = %d, want %d", response.Error.Code, protocol.CodeInvalidParams)
+			}
+			if len(response.Result) != 0 {
+				t.Fatalf("invalid requestState result = %s, want empty", response.Result)
+			}
+		})
+	}
+}
+
 func TestServer_UnknownMethodReturnsJSONRPCError(t *testing.T) {
 	t.Parallel()
 
@@ -332,6 +544,10 @@ func mustUnmarshalResult(t *testing.T, raw json.RawMessage, target any) {
 }
 
 func modernRequestParams(t *testing.T, raw string) json.RawMessage {
+	return modernRequestParamsWithCapabilities(t, raw, map[string]any{})
+}
+
+func modernRequestParamsWithCapabilities(t *testing.T, raw string, capabilities map[string]any) json.RawMessage {
 	t.Helper()
 
 	params := map[string]any{}
@@ -344,7 +560,7 @@ func modernRequestParams(t *testing.T, raw string) json.RawMessage {
 			"name":    "test-host",
 			"version": "0.1.0",
 		},
-		"io.modelcontextprotocol/clientCapabilities": map[string]any{},
+		"io.modelcontextprotocol/clientCapabilities": capabilities,
 	}
 
 	encoded, err := json.Marshal(params)
@@ -352,6 +568,64 @@ func modernRequestParams(t *testing.T, raw string) json.RawMessage {
 		t.Fatalf("marshal request params: %v", err)
 	}
 	return encoded
+}
+
+func confirmPreviewRequestParams(t *testing.T, preview, requestState string, includeResponse bool) json.RawMessage {
+	t.Helper()
+
+	params := map[string]any{
+		"name": "confirm_preview",
+		"arguments": map[string]any{
+			"preview": preview,
+		},
+	}
+	if requestState != "" {
+		params["requestState"] = requestState
+	}
+	if includeResponse {
+		params["inputResponses"] = map[string]any{
+			"confirm_preview": map[string]any{
+				"action": "accept",
+				"content": map[string]any{
+					"confirm": true,
+				},
+			},
+		}
+	}
+
+	encoded, err := json.Marshal(params)
+	if err != nil {
+		t.Fatalf("marshal confirm_preview params: %v", err)
+	}
+	return modernRequestParamsWithCapabilities(t, string(encoded), map[string]any{
+		"elicitation": map[string]any{
+			"form": map[string]any{},
+		},
+	})
+}
+
+func confirmPreviewOutcomeParams(t *testing.T, preview, requestState, action string, confirm bool) json.RawMessage {
+	t.Helper()
+
+	inputResponse := map[string]any{"action": action}
+	if action == "accept" {
+		inputResponse["content"] = map[string]any{"confirm": confirm}
+	}
+	params := map[string]any{
+		"name":         "confirm_preview",
+		"arguments":    map[string]any{"preview": preview},
+		"requestState": requestState,
+		"inputResponses": map[string]any{
+			"confirm_preview": inputResponse,
+		},
+	}
+	encoded, err := json.Marshal(params)
+	if err != nil {
+		t.Fatalf("marshal confirm_preview outcome params: %v", err)
+	}
+	return modernRequestParamsWithCapabilities(t, string(encoded), map[string]any{
+		"elicitation": map[string]any{"form": map[string]any{}},
+	})
 }
 
 type fakeTool struct {
@@ -369,7 +643,7 @@ func (t fakeTool) Definition() tool {
 	}
 }
 
-func (t fakeTool) Call(_ json.RawMessage) (toolCallResult, error) {
+func (t fakeTool) Call(_ toolCallInvocation) (toolCallResult, error) {
 	return toolCallResult{
 		Content: []contentBlock{
 			{

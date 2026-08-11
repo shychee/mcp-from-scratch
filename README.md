@@ -7,11 +7,14 @@ Model Context Protocol style tool use. It intentionally avoids MCP SDKs in the
 first stage so the host/server boundary stays visible.
 
 It is not a complete MCP implementation. The current milestone models a small
-subset of MCP `2026-07-28` over JSON-RPC and stdio:
+subset of MCP `2026-07-28` over JSON-RPC, stdio, and stateless Streamable HTTP:
 
 - stateless `server/discover`
 - protocol version, client identity, and client capabilities on every request
 - complete result envelopes, with cache hints on discovery and list results
+- one stateless MRTR form-elicitation flow with integrity-checked request state
+- one POST-only Streamable HTTP endpoint with modern transport-header checks
+- `subscriptions/listen` for opt-in tool-list change delivery
 - `tools/list`
 - `tools/call`
 - JSON-RPC parse errors, invalid request errors, method-not-found errors, and
@@ -25,11 +28,15 @@ tracked in issues
 [#10](https://github.com/shychee/mcp-from-scratch/issues/10) through
 [#24](https://github.com/shychee/mcp-from-scratch/issues/24).
 
-The first two core steps are complete: session initialization has been replaced
+The first five core steps are complete: session initialization has been replaced
 by stateless `server/discover`, every request is validated independently, and
-successful responses use complete result envelopes. MRTR is next, followed by
-Streamable HTTP and `subscriptions/listen`. OAuth, Tasks, extensions, tracing,
-and interoperability work build on that core instead of blocking it.
+successful responses use complete result envelopes. The `confirm_preview` tool
+demonstrates MRTR by returning an embedded `elicitation/create` input request,
+then completing when the host retries with the exact request state and explicit
+input response. The same dispatcher is available over stateless Streamable HTTP,
+and hosts can refresh their registry after an acknowledged
+`subscriptions/listen` event. OAuth, Tasks, extensions, tracing, and
+interoperability work build on that core instead of blocking it.
 
 See [the learning roadmap](docs/learning-roadmap.md) for the ordered migration,
 compatibility boundaries, and links to the official specification.
@@ -55,13 +62,32 @@ cmd/mcp-server
   reads newline-delimited JSON-RPC requests from stdin
   validates the JSON-RPC envelope
   handles server/discover, tools/list, and tools/call
+  returns an input_required result when confirm_preview needs user input
   writes JSON-RPC responses to stdout
+
+cmd/mcp-http-demo
+  starts an in-process server on a temporary local HTTP endpoint
+  sends each JSON-RPC request in an independent POST
+  mirrors protocol version, method, and tool name in the required headers
+  runs the same discovery and tool-call flow as the stdio host
+
+cmd/mcp-subscription-demo
+  opens an HTTP subscriptions/listen SSE response
+  verifies the first message is the tagged acknowledgement
+  registers late_echo and receives one tagged tools/list_changed notification
+  refreshes tools/list on the host
 ```
 
 ## Run It
 
 ```bash
 make demo
+
+# Run the same flow over stateless Streamable HTTP.
+make demo-http
+
+# Show acknowledgement, registry change, and host refresh.
+make demo-subscriptions
 ```
 
 The demo prints each request and response:
@@ -84,6 +110,18 @@ The demo prints each request and response:
 
 === tools/call response ===
 { ... }
+
+=== confirm_preview input required request ===
+{ ... }
+
+=== confirm_preview input required response ===
+{ ... "resultType": "input_required" ... }
+
+=== confirm_preview retry request ===
+{ ... "inputResponses": { ... }, "requestState": "..." ... }
+
+=== confirm_preview retry response ===
+{ ... "resultType": "complete" ... }
 ```
 
 ## Test It
@@ -95,8 +133,7 @@ make test
 The tests are intentionally split by learning boundary:
 
 - `internal/mcpserver` tests the server protocol behavior directly.
-- `internal/host` starts a real server subprocess and verifies stdio JSON-RPC
-  round trips.
+- `internal/host` verifies real stdio subprocess and HTTP/SSE round trips.
 
 ## What This Implements
 
@@ -114,6 +151,27 @@ This project currently implements a deliberately small JSON-RPC model:
 - public cache hints for discovery and tool-list results
 - deterministic tool-list ordering by tool name
 - host compatibility with legacy successful results that omit `resultType`
+- `resultType: input_required` with an embedded form-mode
+  `elicitation/create` request
+- capability-gated elicitation and a retry with a new JSON-RPC ID,
+  `inputResponses`, and an unchanged opaque `requestState`
+- the standard `-32021` error when a request needs an undeclared client
+  capability
+- process-independent request-state validation bound to the tool name and
+  preview arguments, without hidden server session state
+- POST-only Streamable HTTP dispatch with `MCP-Protocol-Version`, `Mcp-Method`,
+  and named-method `Mcp-Name` validation against each JSON-RPC body
+- JSON content negotiation, single-message framing, and host support for both
+  JSON and request-scoped SSE responses
+- modern HTTP status mapping for header mismatch, unsupported version, and
+  method-not-found errors; no session ID is minted or echoed
+- ACK-first `subscriptions/listen` streams that reuse the listen request ID,
+  deliver only explicitly accepted tool-list events, and support concurrent IDs
+- coalesced list-change signals so a slow listener cannot block registry updates
+- discovery advertises the implemented event with `tools.listChanged: true`
+- HTTP disconnect and stdio `notifications/cancelled` cleanup, plus graceful
+  server completion before stream close
+- host refresh of `tools/list` after a tagged `notifications/tools/list_changed`
 - tool descriptions and calls backed by a small server-side registry
 - defensive validation for missing, unknown, and malformed tool call arguments
 - host-side tool discovery, fake model tool selection, and a transcript of
@@ -123,7 +181,16 @@ It does not yet implement full JSON Schema validation or a real model adapter.
 
 ## Current Tool
 
-The server exposes one toy tool:
+The server exposes two toy tools. `echo` returns text directly. `confirm_preview`
+returns an inert preview only after an MRTR confirmation round.
+
+The request-state HMAC key compiled into this learning demo only makes the
+stateless integrity check visible and repeatable across server instances. It is
+not a production secret or security boundary. A real deployment must inject and
+rotate a protected key, and should bind state to an authenticated principal,
+expiry, and originating request.
+
+The `echo` definition is:
 
 ```json
 {

@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -11,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shychee/mcp-from-scratch/internal/mcpserver"
 	"github.com/shychee/mcp-from-scratch/internal/protocol"
 )
 
@@ -36,8 +40,14 @@ func TestRunDemoTalksToServerProcess(t *testing.T) {
 	if transcript.EchoCall.Error != nil {
 		t.Fatalf("tools/call error = %v, want nil", transcript.EchoCall.Error)
 	}
-	if len(transcript.Exchanges) != 3 {
-		t.Fatalf("exchange count = %d, want 3", len(transcript.Exchanges))
+	if transcript.PreviewInputRequired.Error != nil {
+		t.Fatalf("confirm_preview initial error = %v, want nil", transcript.PreviewInputRequired.Error)
+	}
+	if transcript.PreviewConfirmation.Error != nil {
+		t.Fatalf("confirm_preview retry error = %v, want nil", transcript.PreviewConfirmation.Error)
+	}
+	if len(transcript.Exchanges) != 5 {
+		t.Fatalf("exchange count = %d, want 5", len(transcript.Exchanges))
 	}
 	if transcript.Exchanges[0].Request.Method != "server/discover" {
 		t.Fatalf("first exchange method = %q, want server/discover", transcript.Exchanges[0].Request.Method)
@@ -59,11 +69,11 @@ func TestRunDemoTalksToServerProcess(t *testing.T) {
 			t.Fatalf("%s client capabilities = nil, want object", exchange.Name)
 		}
 	}
-	if len(transcript.DiscoveredTools) != 1 {
-		t.Fatalf("discovered tool count = %d, want 1", len(transcript.DiscoveredTools))
+	if len(transcript.DiscoveredTools) != 2 {
+		t.Fatalf("discovered tool count = %d, want 2", len(transcript.DiscoveredTools))
 	}
-	if transcript.DiscoveredTools[0].Name != "echo" {
-		t.Fatalf("discovered tool name = %q, want echo", transcript.DiscoveredTools[0].Name)
+	if transcript.DiscoveredTools[0].Name != "confirm_preview" || transcript.DiscoveredTools[1].Name != "echo" {
+		t.Fatalf("discovered tool names = [%s %s], want [confirm_preview echo]", transcript.DiscoveredTools[0].Name, transcript.DiscoveredTools[1].Name)
 	}
 
 	var echo struct {
@@ -80,6 +90,165 @@ func TestRunDemoTalksToServerProcess(t *testing.T) {
 	}
 	if echo.Content[0].Text != "hello from fake model" {
 		t.Fatalf("echo text = %q, want hello from fake model", echo.Content[0].Text)
+	}
+
+	var required struct {
+		ResultType   string `json:"resultType"`
+		RequestState string `json:"requestState"`
+	}
+	if err := json.Unmarshal(transcript.PreviewInputRequired.Result, &required); err != nil {
+		t.Fatalf("unmarshal input-required result: %v", err)
+	}
+	if required.ResultType != protocol.ResultTypeInputRequired || required.RequestState == "" {
+		t.Fatalf("input-required result = %#v, want input_required with state", required)
+	}
+
+	initialRequest := transcript.Exchanges[3].Request
+	retryRequest := transcript.Exchanges[4].Request
+	if initialRequest.ID == nil || retryRequest.ID == nil || *initialRequest.ID == *retryRequest.ID {
+		t.Fatalf("MRTR request IDs = %v and %v, want different IDs", initialRequest.ID, retryRequest.ID)
+	}
+	var retryParams struct {
+		RequestState string                     `json:"requestState"`
+		Responses    map[string]json.RawMessage `json:"inputResponses"`
+	}
+	if err := json.Unmarshal(retryRequest.Params, &retryParams); err != nil {
+		t.Fatalf("unmarshal confirm_preview retry params: %v", err)
+	}
+	if retryParams.RequestState != required.RequestState {
+		t.Fatalf("retry requestState = %q, want exact input-required state", retryParams.RequestState)
+	}
+	if _, ok := retryParams.Responses["confirm_preview"]; !ok {
+		t.Fatalf("retry inputResponses = %#v, want confirm_preview", retryParams.Responses)
+	}
+
+	var confirmed struct {
+		ResultType string `json:"resultType"`
+		Content    []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(transcript.PreviewConfirmation.Result, &confirmed); err != nil {
+		t.Fatalf("unmarshal confirmation result: %v", err)
+	}
+	if confirmed.ResultType != protocol.ResultTypeComplete || len(confirmed.Content) != 1 {
+		t.Fatalf("confirmation result = %#v, want complete content", confirmed)
+	}
+}
+
+func TestRunHTTPDemoTalksToStatelessServer(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(mcpserver.New().HTTPHandler())
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	transcript, err := RunHTTPDemo(ctx, server.URL)
+	if err != nil {
+		t.Fatalf("RunHTTPDemo() error = %v", err)
+	}
+	if len(transcript.Exchanges) != 5 {
+		t.Fatalf("exchange count = %d, want 5", len(transcript.Exchanges))
+	}
+	for _, exchange := range transcript.Exchanges {
+		if exchange.Response == nil || exchange.Response.Error != nil {
+			t.Fatalf("%s response = %#v, want success", exchange.Name, exchange.Response)
+		}
+	}
+}
+
+func TestHTTPRPCClientReadsRequestScopedSSEUntilFinalResponse(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		defer request.Body.Close()
+		var rpcRequest protocol.Request
+		if err := json.NewDecoder(request.Body).Decode(&rpcRequest); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		writer.Header().Set("Content-Type", protocol.MediaTypeSSE)
+		for _, message := range []any{
+			protocol.Notification{
+				JSONRPC: "2.0",
+				Method:  "notifications/progress",
+				Params:  json.RawMessage(`{"progressToken":"demo","progress":1}`),
+			},
+			protocol.Response{
+				JSONRPC: "2.0",
+				ID:      rpcRequest.ID,
+				Result:  json.RawMessage(`{"resultType":"complete"}`),
+			},
+		} {
+			encoded, err := json.Marshal(message)
+			if err != nil {
+				t.Errorf("encode SSE message: %v", err)
+				return
+			}
+			if _, err := fmt.Fprintf(writer, "data: %s\n\n", encoded); err != nil {
+				t.Errorf("write SSE message: %v", err)
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	params, err := json.Marshal(protocol.RequestParams{Meta: clientRequestMeta()})
+	if err != nil {
+		t.Fatalf("encode params: %v", err)
+	}
+	client := &httpRPCClient{ctx: ctx, endpoint: server.URL, client: http.DefaultClient}
+	response, err := client.call(protocol.Request{
+		JSONRPC: "2.0",
+		ID:      protocol.ID(91),
+		Method:  "tools/list",
+		Params:  params,
+	})
+	if err != nil {
+		t.Fatalf("call() error = %v", err)
+	}
+	if response.ID == nil || *response.ID != 91 || len(response.Result) == 0 {
+		t.Fatalf("response = %#v, want final response ID 91", response)
+	}
+}
+
+func TestHTTPToolsSubscriptionRefreshesListOnChange(t *testing.T) {
+	t.Parallel()
+
+	server := mcpserver.New()
+	httpServer := httptest.NewServer(server.HTTPHandler())
+	defer httpServer.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	subscription, err := OpenHTTPToolsSubscription(ctx, httpServer.URL, 61)
+	if err != nil {
+		t.Fatalf("OpenHTTPToolsSubscription() error = %v", err)
+	}
+	defer subscription.Close()
+	if acknowledged := subscription.Acknowledged(); acknowledged.Method != "notifications/subscriptions/acknowledged" {
+		t.Fatalf("acknowledged method = %q", acknowledged.Method)
+	}
+
+	if err := server.RegisterEchoTool("late_echo"); err != nil {
+		t.Fatalf("RegisterEchoTool() error = %v", err)
+	}
+	changed, refreshed, err := subscription.RefreshOnNextToolsListChanged(62)
+	if err != nil {
+		t.Fatalf("RefreshOnNextToolsListChanged() error = %v", err)
+	}
+	if changed.Method != "notifications/tools/list_changed" {
+		t.Fatalf("changed method = %q", changed.Method)
+	}
+	var listed toolsListResult
+	if err := decodeCompleteResult(refreshed.Result, &listed); err != nil {
+		t.Fatalf("decode refreshed tools/list: %v", err)
+	}
+	if len(listed.Tools) != 3 || listed.Tools[1].Name != "echo" || listed.Tools[2].Name != "late_echo" {
+		t.Fatalf("refreshed tools = %#v, want confirm_preview, echo, late_echo", listed.Tools)
 	}
 }
 

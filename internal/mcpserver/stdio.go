@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sync"
 
 	"github.com/shychee/mcp-from-scratch/internal/protocol"
 )
@@ -15,6 +16,49 @@ import (
 func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) error {
 	scanner := bufio.NewScanner(input)
 	encoder := json.NewEncoder(output)
+	var encoderMu sync.Mutex
+	encode := func(value any) error {
+		encoderMu.Lock()
+		defer encoderMu.Unlock()
+		return encoder.Encode(value)
+	}
+
+	activeSubscriptions := make(map[int]*subscription)
+	var activeSubscriptionsMu sync.Mutex
+	removeSubscription := func(id int, expected *subscription) *subscription {
+		activeSubscriptionsMu.Lock()
+		defer activeSubscriptionsMu.Unlock()
+		subscriber := activeSubscriptions[id]
+		if expected != nil && subscriber != expected {
+			return nil
+		}
+		delete(activeSubscriptions, id)
+		return subscriber
+	}
+	var subscriptionWriters sync.WaitGroup
+	defer func() {
+		activeSubscriptionsMu.Lock()
+		subscribers := make([]*subscription, 0, len(activeSubscriptions))
+		for _, subscriber := range activeSubscriptions {
+			subscribers = append(subscribers, subscriber)
+		}
+		activeSubscriptions = make(map[int]*subscription)
+		activeSubscriptionsMu.Unlock()
+		for _, subscriber := range subscribers {
+			s.unsubscribe(subscriber)
+		}
+		subscriptionWriters.Wait()
+	}()
+	subscriptionErrors := make(chan error, 1)
+	reportSubscriptionError := func(err error) {
+		select {
+		case subscriptionErrors <- err:
+		default:
+		}
+		if closer, ok := input.(io.Closer); ok {
+			_ = closer.Close()
+		}
+	}
 
 	for scanner.Scan() {
 		if err := ctx.Err(); err != nil {
@@ -27,7 +71,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 				JSONRPC: "2.0",
 				Error:   protocol.NewError(protocol.CodeParseError, "parse error"),
 			}
-			if encodeErr := encoder.Encode(response); encodeErr != nil {
+			if encodeErr := encode(response); encodeErr != nil {
 				return fmt.Errorf("encode parse error response: %w", encodeErr)
 			}
 			continue
@@ -38,9 +82,86 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 				ID:      request.ID,
 				Error:   requestError,
 			}
-			if encodeErr := encoder.Encode(response); encodeErr != nil {
+			if encodeErr := encode(response); encodeErr != nil {
 				return fmt.Errorf("encode invalid request error response: %w", encodeErr)
 			}
+			continue
+		}
+		if request.ID == nil && request.Method == "notifications/cancelled" {
+			var params struct {
+				RequestID *int `json:"requestId"`
+			}
+			if err := json.Unmarshal(request.Params, &params); err == nil && params.RequestID != nil {
+				if subscriber := removeSubscription(*params.RequestID, nil); subscriber != nil {
+					s.unsubscribe(subscriber)
+				}
+			}
+			continue
+		}
+		if request.Method == "subscriptions/listen" {
+			if request.ID == nil {
+				continue
+			}
+			activeSubscriptionsMu.Lock()
+			existing := activeSubscriptions[*request.ID]
+			activeSubscriptionsMu.Unlock()
+			if existing != nil {
+				response := protocol.Response{
+					JSONRPC: "2.0",
+					ID:      request.ID,
+					Error:   protocol.NewError(protocol.CodeInvalidParams, "subscription request ID is already active"),
+				}
+				if err := encode(response); err != nil {
+					return fmt.Errorf("encode duplicate subscription error response: %w", err)
+				}
+				continue
+			}
+			subscriber, acknowledged, err := s.subscribe(request.ID, request.Params)
+			if err != nil {
+				response := protocol.Response{
+					JSONRPC: "2.0",
+					ID:      request.ID,
+					Error:   err,
+				}
+				if encodeErr := encode(response); encodeErr != nil {
+					return fmt.Errorf("encode subscription error response: %w", encodeErr)
+				}
+				continue
+			}
+			activeSubscriptionsMu.Lock()
+			activeSubscriptions[*request.ID] = subscriber
+			activeSubscriptionsMu.Unlock()
+			if err := encode(acknowledged); err != nil {
+				s.unsubscribe(subscriber)
+				removeSubscription(*request.ID, subscriber)
+				return fmt.Errorf("encode subscription acknowledgement: %w", err)
+			}
+			subscriptionWriters.Add(1)
+			go func(subscriptionID int, subscriber *subscription) {
+				defer subscriptionWriters.Done()
+				defer func() {
+					removeSubscription(subscriptionID, subscriber)
+					s.unsubscribe(subscriber)
+				}()
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case <-subscriber.done:
+						return
+					case <-subscriber.complete:
+						if err := encode(subscriptionCompleteResponse(subscriptionID)); err != nil {
+							reportSubscriptionError(fmt.Errorf("encode subscription completion: %w", err))
+						}
+						return
+					case message := <-subscriber.events:
+						if err := encode(message); err != nil {
+							reportSubscriptionError(fmt.Errorf("encode subscription message: %w", err))
+							return
+						}
+					}
+				}
+			}(*request.ID, subscriber)
 			continue
 		}
 		response := s.Handle(ctx, request)
@@ -48,11 +169,16 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 		if request.ID == nil {
 			continue
 		}
-		if err := encoder.Encode(response); err != nil {
+		if err := encode(response); err != nil {
 			return fmt.Errorf("encode response: %w", err)
 		}
 	}
 
+	select {
+	case err := <-subscriptionErrors:
+		return err
+	default:
+	}
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("read request: %w", err)
 	}

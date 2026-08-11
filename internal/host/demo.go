@@ -1,10 +1,13 @@
 package host
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"mime"
+	"net/http"
 	"os/exec"
 
 	"github.com/shychee/mcp-from-scratch/internal/protocol"
@@ -39,8 +42,10 @@ type toolsListResult struct {
 
 type toolCallRequestParams struct {
 	protocol.RequestParams
-	Name      string          `json:"name"`
-	Arguments json.RawMessage `json:"arguments"`
+	Name           string                     `json:"name"`
+	Arguments      json.RawMessage            `json:"arguments"`
+	InputResponses map[string]json.RawMessage `json:"inputResponses,omitempty"`
+	RequestState   string                     `json:"requestState,omitempty"`
 }
 
 type ToolCallDecision struct {
@@ -49,11 +54,20 @@ type ToolCallDecision struct {
 }
 
 type Transcript struct {
-	Discovery       protocol.Response
-	ToolsList       protocol.Response
-	EchoCall        protocol.Response
-	Exchanges       []Exchange
-	DiscoveredTools []ToolDescription
+	Discovery            protocol.Response
+	ToolsList            protocol.Response
+	EchoCall             protocol.Response
+	PreviewInputRequired protocol.Response
+	PreviewConfirmation  protocol.Response
+	Exchanges            []Exchange
+	DiscoveredTools      []ToolDescription
+}
+
+type inputRequiredResult struct {
+	InputRequests map[string]struct {
+		Method string `json:"method"`
+	} `json:"inputRequests"`
+	RequestState string `json:"requestState"`
 }
 
 type Exchange struct {
@@ -109,7 +123,27 @@ type rpcClient struct {
 	decoder *json.Decoder
 }
 
-func runProtocolDemo(client *rpcClient) (Transcript, error) {
+type protocolClient interface {
+	call(protocol.Request) (protocol.Response, error)
+}
+
+type httpRPCClient struct {
+	ctx      context.Context
+	endpoint string
+	client   *http.Client
+}
+
+// RunHTTPDemo runs the same stateless protocol flow over Streamable HTTP.
+func RunHTTPDemo(ctx context.Context, endpoint string) (Transcript, error) {
+	client := &httpRPCClient{
+		ctx:      ctx,
+		endpoint: endpoint,
+		client:   http.DefaultClient,
+	}
+	return runProtocolDemo(client)
+}
+
+func runProtocolDemo(client protocolClient) (Transcript, error) {
 	requestParamsJSON, err := json.Marshal(protocol.RequestParams{
 		Meta: clientRequestMeta(),
 	})
@@ -174,15 +208,85 @@ func runProtocolDemo(client *rpcClient) (Transcript, error) {
 		return Transcript{}, fmt.Errorf("decode tools/call result: %w", err)
 	}
 
+	previewArguments, err := json.Marshal(map[string]string{
+		"preview": "archive demo preview",
+	})
+	if err != nil {
+		return Transcript{}, fmt.Errorf("encode confirm_preview arguments: %w", err)
+	}
+	previewRequestParams := toolCallRequestParams{
+		RequestParams: protocol.RequestParams{Meta: clientRequestMeta()},
+		Name:          "confirm_preview",
+		Arguments:     previewArguments,
+	}
+	previewRequestParamsJSON, err := json.Marshal(previewRequestParams)
+	if err != nil {
+		return Transcript{}, fmt.Errorf("encode initial confirm_preview params: %w", err)
+	}
+	previewRequest := protocol.Request{
+		JSONRPC: "2.0",
+		ID:      protocol.ID(4),
+		Method:  "tools/call",
+		Params:  previewRequestParamsJSON,
+	}
+	previewInputRequired, err := client.call(previewRequest)
+	if err != nil {
+		return Transcript{}, fmt.Errorf("initial confirm_preview call: %w", err)
+	}
+	var required inputRequiredResult
+	if err := decodeInputRequiredResult(previewInputRequired.Result, &required); err != nil {
+		return Transcript{}, fmt.Errorf("decode confirm_preview input-required result: %w", err)
+	}
+	inputRequest, ok := required.InputRequests["confirm_preview"]
+	if !ok || inputRequest.Method != "elicitation/create" {
+		return Transcript{}, fmt.Errorf("confirm_preview did not request elicitation/create")
+	}
+
+	confirmationResponse, err := json.Marshal(map[string]any{
+		"action": "accept",
+		"content": map[string]bool{
+			"confirm": true,
+		},
+	})
+	if err != nil {
+		return Transcript{}, fmt.Errorf("encode confirm_preview input response: %w", err)
+	}
+	previewRetryParams := previewRequestParams
+	previewRetryParams.InputResponses = map[string]json.RawMessage{
+		"confirm_preview": confirmationResponse,
+	}
+	previewRetryParams.RequestState = required.RequestState
+	previewRetryParamsJSON, err := json.Marshal(previewRetryParams)
+	if err != nil {
+		return Transcript{}, fmt.Errorf("encode confirm_preview retry params: %w", err)
+	}
+	previewRetryRequest := protocol.Request{
+		JSONRPC: "2.0",
+		ID:      protocol.ID(5),
+		Method:  "tools/call",
+		Params:  previewRetryParamsJSON,
+	}
+	previewConfirmation, err := client.call(previewRetryRequest)
+	if err != nil {
+		return Transcript{}, fmt.Errorf("retry confirm_preview call: %w", err)
+	}
+	if err := decodeCompleteResult(previewConfirmation.Result, &struct{}{}); err != nil {
+		return Transcript{}, fmt.Errorf("decode confirm_preview result: %w", err)
+	}
+
 	return Transcript{
-		Discovery:       discovery,
-		ToolsList:       toolsList,
-		EchoCall:        echoCall,
-		DiscoveredTools: listedTools.Tools,
+		Discovery:            discovery,
+		ToolsList:            toolsList,
+		EchoCall:             echoCall,
+		PreviewInputRequired: previewInputRequired,
+		PreviewConfirmation:  previewConfirmation,
+		DiscoveredTools:      listedTools.Tools,
 		Exchanges: []Exchange{
 			{Name: "server/discover", Request: discoveryRequest, Response: &discovery},
 			{Name: "tools/list", Request: toolsListRequest, Response: &toolsList},
 			{Name: "tools/call", Request: echoCallRequest, Response: &echoCall},
+			{Name: "confirm_preview input required", Request: previewRequest, Response: &previewInputRequired},
+			{Name: "confirm_preview retry", Request: previewRetryRequest, Response: &previewConfirmation},
 		},
 	}, nil
 }
@@ -220,6 +324,22 @@ func decodeCompleteResult(raw json.RawMessage, target any) error {
 	return nil
 }
 
+func decodeInputRequiredResult(raw json.RawMessage, target any) error {
+	var envelope struct {
+		ResultType string `json:"resultType"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return fmt.Errorf("decode result envelope: %w", err)
+	}
+	if envelope.ResultType != protocol.ResultTypeInputRequired {
+		return fmt.Errorf("unexpected result type %q", envelope.ResultType)
+	}
+	if err := json.Unmarshal(raw, target); err != nil {
+		return fmt.Errorf("decode result body: %w", err)
+	}
+	return nil
+}
+
 func clientRequestMeta() protocol.RequestMeta {
 	return protocol.RequestMeta{
 		ProtocolVersion: protocol.Version20260728,
@@ -227,7 +347,11 @@ func clientRequestMeta() protocol.RequestMeta {
 			Name:    "mcp-from-scratch-host",
 			Version: "0.1.0",
 		},
-		ClientCapabilities: map[string]any{},
+		ClientCapabilities: map[string]any{
+			"elicitation": map[string]any{
+				"form": map[string]any{},
+			},
+		},
 	}
 }
 
@@ -244,6 +368,108 @@ func (c *rpcClient) call(request protocol.Request) (protocol.Response, error) {
 		return response, response.Error
 	}
 	return response, nil
+}
+
+func (c *httpRPCClient) call(rpcRequest protocol.Request) (protocol.Response, error) {
+	request, err := c.newRequest(rpcRequest)
+	if err != nil {
+		return protocol.Response{}, err
+	}
+
+	httpResponse, err := c.client.Do(request)
+	if err != nil {
+		return protocol.Response{}, fmt.Errorf("send HTTP request: %w", err)
+	}
+	defer httpResponse.Body.Close()
+
+	mediaType, _, err := mime.ParseMediaType(httpResponse.Header.Get("Content-Type"))
+	if err != nil {
+		return protocol.Response{}, fmt.Errorf("decode HTTP response content type %q: %w", httpResponse.Header.Get("Content-Type"), err)
+	}
+	var response protocol.Response
+	switch mediaType {
+	case protocol.MediaTypeJSON:
+		if err := json.NewDecoder(httpResponse.Body).Decode(&response); err != nil {
+			return protocol.Response{}, fmt.Errorf("decode HTTP response with status %d: %w", httpResponse.StatusCode, err)
+		}
+	case protocol.MediaTypeSSE:
+		response, err = decodeHTTPSSEResponse(bufio.NewReader(httpResponse.Body), rpcRequest.ID)
+		if err != nil {
+			return protocol.Response{}, fmt.Errorf("decode HTTP SSE response with status %d: %w", httpResponse.StatusCode, err)
+		}
+	default:
+		return protocol.Response{}, fmt.Errorf("unexpected HTTP response content type %q", mediaType)
+	}
+	if response.Error != nil {
+		return response, response.Error
+	}
+	if httpResponse.StatusCode != http.StatusOK {
+		return response, fmt.Errorf("unexpected HTTP status %d", httpResponse.StatusCode)
+	}
+	return response, nil
+}
+
+func decodeHTTPSSEResponse(reader *bufio.Reader, requestID *int) (protocol.Response, error) {
+	for {
+		raw, err := readSSEData(reader)
+		if err != nil {
+			return protocol.Response{}, err
+		}
+		var envelope struct {
+			ID     *int   `json:"id"`
+			Method string `json:"method"`
+		}
+		if err := json.Unmarshal(raw, &envelope); err != nil {
+			return protocol.Response{}, fmt.Errorf("decode SSE JSON-RPC message: %w", err)
+		}
+		if envelope.Method != "" {
+			continue
+		}
+		if requestID == nil || envelope.ID == nil || *requestID != *envelope.ID {
+			return protocol.Response{}, fmt.Errorf("unexpected SSE response ID %v", envelope.ID)
+		}
+		var response protocol.Response
+		if err := json.Unmarshal(raw, &response); err != nil {
+			return protocol.Response{}, fmt.Errorf("decode SSE JSON-RPC response: %w", err)
+		}
+		return response, nil
+	}
+}
+
+func (c *httpRPCClient) newRequest(rpcRequest protocol.Request) (*http.Request, error) {
+	body, err := json.Marshal(rpcRequest)
+	if err != nil {
+		return nil, fmt.Errorf("encode request: %w", err)
+	}
+	request, err := http.NewRequestWithContext(c.ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("create HTTP request: %w", err)
+	}
+	request.Header.Set("Content-Type", protocol.MediaTypeJSON)
+	request.Header.Set("Accept", protocol.MediaTypeJSON+", "+protocol.MediaTypeSSE)
+	request.Header.Set(protocol.HeaderProtocolVersion, protocol.Version20260728)
+	request.Header.Set(protocol.HeaderMethod, rpcRequest.Method)
+	if name, ok := requestName(rpcRequest); ok {
+		request.Header.Set(protocol.HeaderName, name)
+	}
+	return request, nil
+}
+
+func requestName(request protocol.Request) (string, bool) {
+	if !protocol.MethodUsesNameHeader(request.Method) {
+		return "", false
+	}
+	var params struct {
+		Name string `json:"name"`
+		URI  string `json:"uri"`
+	}
+	if err := json.Unmarshal(request.Params, &params); err != nil {
+		return "", false
+	}
+	if request.Method == "resources/read" {
+		return params.URI, params.URI != ""
+	}
+	return params.Name, params.Name != ""
 }
 
 func openAIToolsFromToolDescriptions(tools []ToolDescription) []openAITool {

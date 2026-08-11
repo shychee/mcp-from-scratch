@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"sync"
 
 	"github.com/shychee/mcp-from-scratch/internal/protocol"
 )
@@ -19,11 +20,13 @@ const (
 
 type Tool interface {
 	Definition() tool
-	Call(json.RawMessage) (toolCallResult, error)
+	Call(toolCallInvocation) (toolCallResult, error)
 }
 
 type Server struct {
-	tools []Tool
+	mu            sync.RWMutex
+	tools         []Tool
+	subscriptions map[*subscription]struct{}
 }
 
 type discoverResult struct {
@@ -54,7 +57,9 @@ type tool struct {
 
 type toolCallResult struct {
 	protocol.Result
-	Content []contentBlock `json:"content"`
+	Content       []contentBlock          `json:"content,omitempty"`
+	InputRequests map[string]inputRequest `json:"inputRequests,omitempty"`
+	RequestState  string                  `json:"requestState,omitempty"`
 }
 
 type contentBlock struct {
@@ -63,8 +68,18 @@ type contentBlock struct {
 }
 
 type toolCallParams struct {
-	Name      string          `json:"name"`
-	Arguments json.RawMessage `json:"arguments"`
+	protocol.RequestParams
+	Name           string                     `json:"name"`
+	Arguments      json.RawMessage            `json:"arguments"`
+	InputResponses map[string]json.RawMessage `json:"inputResponses,omitempty"`
+	RequestState   string                     `json:"requestState,omitempty"`
+}
+
+type toolCallInvocation struct {
+	Arguments          json.RawMessage
+	InputResponses     map[string]json.RawMessage
+	RequestState       string
+	ClientCapabilities map[string]any
 }
 
 type echoArguments struct {
@@ -73,10 +88,11 @@ type echoArguments struct {
 
 func New(tools ...Tool) *Server {
 	if len(tools) == 0 {
-		tools = []Tool{echoTool{}}
+		tools = []Tool{newEchoTool("echo"), confirmPreviewTool{}}
 	}
 	return &Server{
-		tools: tools,
+		tools:         append([]Tool(nil), tools...),
+		subscriptions: make(map[*subscription]struct{}),
 	}
 }
 
@@ -101,12 +117,13 @@ func (s *Server) Handle(_ context.Context, request protocol.Request) protocol.Re
 			},
 			SupportedVersions: []string{protocolVersion},
 			Capabilities: capabilities{
-				Tools: map[string]any{},
+				Tools: map[string]any{"listChanged": true},
 			},
 		})
 	case "tools/list":
-		tools := make([]tool, 0, len(s.tools))
-		for _, t := range s.tools {
+		registeredTools := s.toolSnapshot()
+		tools := make([]tool, 0, len(registeredTools))
+		for _, t := range registeredTools {
 			tools = append(tools, t.Definition())
 		}
 		sort.Slice(tools, func(i, j int) bool {
@@ -123,10 +140,17 @@ func (s *Server) Handle(_ context.Context, request protocol.Request) protocol.Re
 	case "tools/call":
 		result, err := s.callTool(request.Params)
 		if err != nil {
-			response.Error = protocol.NewError(protocol.CodeInvalidParams, err.Error())
+			if protocolError, ok := err.(*protocol.Error); ok {
+				response.Error = protocolError
+			} else {
+				response.Error = protocol.NewError(protocol.CodeInvalidParams, err.Error())
+			}
 			return response
 		}
-		result.Result = newResult()
+		if result.ResultType == "" {
+			result.ResultType = protocol.ResultTypeComplete
+		}
+		result.Meta = newResult().Meta
 		response.Result = mustMarshal(result)
 	default:
 		response.Error = protocol.NewError(protocol.CodeMethodNotFound, "method not found")
@@ -168,11 +192,17 @@ func validateRequestMetadata(raw json.RawMessage) *protocol.Error {
 	return nil
 }
 
-type echoTool struct{}
+type echoTool struct {
+	name string
+}
 
-func (echoTool) Definition() tool {
+func newEchoTool(name string) Tool {
+	return echoTool{name: name}
+}
+
+func (t echoTool) Definition() tool {
 	return tool{
-		Name:        "echo",
+		Name:        t.name,
 		Description: "Return the text argument back to the caller.",
 		InputSchema: map[string]any{
 			"type": "object",
@@ -187,9 +217,9 @@ func (echoTool) Definition() tool {
 	}
 }
 
-func (echoTool) Call(raw json.RawMessage) (toolCallResult, error) {
+func (echoTool) Call(invocation toolCallInvocation) (toolCallResult, error) {
 	var args echoArguments
-	if err := json.Unmarshal(raw, &args); err != nil {
+	if err := json.Unmarshal(invocation.Arguments, &args); err != nil {
 		return toolCallResult{}, fmt.Errorf("decode echo arguments: %w", err)
 	}
 	return toolCallResult{
@@ -211,17 +241,28 @@ func (s *Server) callTool(raw json.RawMessage) (toolCallResult, error) {
 		return toolCallResult{}, fmt.Errorf("missing tool name")
 	}
 
-	for _, registeredTool := range s.tools {
+	for _, registeredTool := range s.toolSnapshot() {
 		definition := registeredTool.Definition()
 		if definition.Name == params.Name {
 			if err := validateToolArguments(definition, params.Arguments); err != nil {
 				return toolCallResult{}, err
 			}
-			return registeredTool.Call(params.Arguments)
+			return registeredTool.Call(toolCallInvocation{
+				Arguments:          params.Arguments,
+				InputResponses:     params.InputResponses,
+				RequestState:       params.RequestState,
+				ClientCapabilities: params.Meta.ClientCapabilities,
+			})
 		}
 	}
 
 	return toolCallResult{}, fmt.Errorf("unknown tool %q", params.Name)
+}
+
+func (s *Server) toolSnapshot() []Tool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return append([]Tool(nil), s.tools...)
 }
 
 func validateToolArguments(definition tool, raw json.RawMessage) error {
