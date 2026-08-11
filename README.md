@@ -155,14 +155,19 @@ This project currently implements a deliberately small JSON-RPC model:
   `elicitation/create` request
 - capability-gated elicitation and a retry with a new JSON-RPC ID,
   `inputResponses`, and an unchanged opaque `requestState`
+- the standard `-32021` error when a request needs an undeclared client
+  capability
 - process-independent request-state validation bound to the tool name and
   preview arguments, without hidden server session state
 - POST-only Streamable HTTP dispatch with `MCP-Protocol-Version`, `Mcp-Method`,
   and named-method `Mcp-Name` validation against each JSON-RPC body
+- JSON content negotiation, single-message framing, and host support for both
+  JSON and request-scoped SSE responses
 - modern HTTP status mapping for header mismatch, unsupported version, and
   method-not-found errors; no session ID is minted or echoed
 - ACK-first `subscriptions/listen` streams that reuse the listen request ID,
   deliver only explicitly accepted tool-list events, and support concurrent IDs
+- coalesced list-change signals so a slow listener cannot block registry updates
 - discovery advertises the implemented event with `tools.listChanged: true`
 - HTTP disconnect and stdio `notifications/cancelled` cleanup, plus graceful
   server completion before stream close

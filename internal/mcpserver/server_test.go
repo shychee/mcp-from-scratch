@@ -410,8 +410,58 @@ func TestServer_ConfirmPreviewRequiresFormCapability(t *testing.T) {
 			if response.Error == nil {
 				t.Fatal("confirm_preview without form capability error = nil, want protocol error")
 			}
+			if response.Error.Code != protocol.CodeMissingRequiredClientCapability {
+				t.Fatalf("error code = %d, want %d", response.Error.Code, protocol.CodeMissingRequiredClientCapability)
+			}
 			if len(response.Result) != 0 {
 				t.Fatalf("confirm_preview without form capability result = %s, want empty", response.Result)
+			}
+		})
+	}
+}
+
+func TestServer_ConfirmPreviewHandlesElicitationOutcomes(t *testing.T) {
+	t.Parallel()
+
+	initial := New().Handle(context.Background(), protocol.Request{
+		JSONRPC: "2.0",
+		ID:      protocol.ID(15),
+		Method:  "tools/call",
+		Params:  confirmPreviewRequestParams(t, "demo preview", "", false),
+	})
+	var required struct {
+		RequestState string `json:"requestState"`
+	}
+	mustUnmarshalResult(t, initial.Result, &required)
+
+	tests := []struct {
+		name    string
+		action  string
+		confirm bool
+		want    string
+	}{
+		{name: "accept false", action: "accept", want: "preview was not confirmed"},
+		{name: "decline", action: "decline", want: "preview declined"},
+		{name: "cancel", action: "cancel", want: "preview canceled"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			response := New().Handle(context.Background(), protocol.Request{
+				JSONRPC: "2.0",
+				ID:      protocol.ID(16),
+				Method:  "tools/call",
+				Params:  confirmPreviewOutcomeParams(t, "demo preview", required.RequestState, tt.action, tt.confirm),
+			})
+			if response.Error != nil {
+				t.Fatalf("outcome error = %v", response.Error)
+			}
+			var result struct {
+				Content []contentBlock `json:"content"`
+			}
+			mustUnmarshalResult(t, response.Result, &result)
+			if len(result.Content) != 1 || result.Content[0].Text != tt.want {
+				t.Fatalf("content = %#v, want %q", result.Content, tt.want)
 			}
 		})
 	}
@@ -551,6 +601,30 @@ func confirmPreviewRequestParams(t *testing.T, preview, requestState string, inc
 		"elicitation": map[string]any{
 			"form": map[string]any{},
 		},
+	})
+}
+
+func confirmPreviewOutcomeParams(t *testing.T, preview, requestState, action string, confirm bool) json.RawMessage {
+	t.Helper()
+
+	inputResponse := map[string]any{"action": action}
+	if action == "accept" {
+		inputResponse["content"] = map[string]any{"confirm": confirm}
+	}
+	params := map[string]any{
+		"name":         "confirm_preview",
+		"arguments":    map[string]any{"preview": preview},
+		"requestState": requestState,
+		"inputResponses": map[string]any{
+			"confirm_preview": inputResponse,
+		},
+	}
+	encoded, err := json.Marshal(params)
+	if err != nil {
+		t.Fatalf("marshal confirm_preview outcome params: %v", err)
+	}
+	return modernRequestParamsWithCapabilities(t, string(encoded), map[string]any{
+		"elicitation": map[string]any{"form": map[string]any{}},
 	})
 }
 

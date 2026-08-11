@@ -88,7 +88,7 @@ type echoArguments struct {
 
 func New(tools ...Tool) *Server {
 	if len(tools) == 0 {
-		tools = []Tool{NewEchoTool("echo"), confirmPreviewTool{}}
+		tools = []Tool{newEchoTool("echo"), confirmPreviewTool{}}
 	}
 	return &Server{
 		tools:         append([]Tool(nil), tools...),
@@ -140,7 +140,11 @@ func (s *Server) Handle(_ context.Context, request protocol.Request) protocol.Re
 	case "tools/call":
 		result, err := s.callTool(request.Params)
 		if err != nil {
-			response.Error = protocol.NewError(protocol.CodeInvalidParams, err.Error())
+			if protocolError, ok := err.(*protocol.Error); ok {
+				response.Error = protocolError
+			} else {
+				response.Error = protocol.NewError(protocol.CodeInvalidParams, err.Error())
+			}
 			return response
 		}
 		if result.ResultType == "" {
@@ -192,8 +196,7 @@ type echoTool struct {
 	name string
 }
 
-// NewEchoTool returns an echo tool that can be registered at runtime.
-func NewEchoTool(name string) Tool {
+func newEchoTool(name string) Tool {
 	return echoTool{name: name}
 }
 

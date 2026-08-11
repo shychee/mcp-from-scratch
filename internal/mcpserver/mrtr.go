@@ -58,7 +58,17 @@ func (confirmPreviewTool) Definition() tool {
 
 func (confirmPreviewTool) Call(invocation toolCallInvocation) (toolCallResult, error) {
 	if !supportsFormElicitation(invocation.ClientCapabilities) {
-		return toolCallResult{}, fmt.Errorf("confirm_preview requires form elicitation capability")
+		return toolCallResult{}, protocol.NewErrorWithData(
+			protocol.CodeMissingRequiredClientCapability,
+			"missing required client capability",
+			map[string]any{
+				"requiredCapabilities": map[string]any{
+					"elicitation": map[string]any{
+						"form": map[string]any{},
+					},
+				},
+			},
+		)
 	}
 
 	var args confirmPreviewArguments

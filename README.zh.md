@@ -150,14 +150,17 @@ make test
   `elicitation/create` request
 - capability-gated elicitation，以及使用新 JSON-RPC ID、`inputResponses` 和未修改
   opaque `requestState` 的重试
+- 请求依赖客户端未声明的 capability 时返回标准 `-32021` 错误
 - request state 校验绑定 tool name 和 preview arguments，新 server instance 无需隐藏
   session state 即可完成重试
 - 只接受 POST 的 Streamable HTTP dispatch，并按 JSON-RPC body 校验
   `MCP-Protocol-Version`、`Mcp-Method` 和 named method 的 `Mcp-Name`
+- 校验 JSON media negotiation 和单消息 framing；host 同时支持 JSON 与请求级 SSE response
 - header mismatch、unsupported version、method not found 使用现代 HTTP 状态映射，
   server 不创建或回显 session ID
 - ACK-first `subscriptions/listen` stream 复用 listen request ID，只投递显式接受的
   tool-list 事件，并支持并发 ID
+- 合并慢 listener 尚未消费的 list-change signal，避免阻塞 registry update
 - discovery 通过 `tools.listChanged: true` 声明已实现的事件能力
 - HTTP disconnect 和 stdio `notifications/cancelled` 都会清理订阅；server 也可在关闭
   stream 前发送 graceful complete response

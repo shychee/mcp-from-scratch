@@ -65,8 +65,9 @@ const (
 	CodeInvalidParams  ErrorCode = -32602
 	CodeInternalError  ErrorCode = -32603
 
-	CodeHeaderMismatch             ErrorCode = -32020
-	CodeUnsupportedProtocolVersion ErrorCode = -32022
+	CodeHeaderMismatch                  ErrorCode = -32020
+	CodeMissingRequiredClientCapability ErrorCode = -32021
+	CodeUnsupportedProtocolVersion      ErrorCode = -32022
 )
 
 // Request is the subset of JSON-RPC 2.0 request fields this learning project needs.

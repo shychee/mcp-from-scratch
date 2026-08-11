@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"reflect"
@@ -156,6 +158,63 @@ func TestRunHTTPDemoTalksToStatelessServer(t *testing.T) {
 	}
 }
 
+func TestHTTPRPCClientReadsRequestScopedSSEUntilFinalResponse(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		defer request.Body.Close()
+		var rpcRequest protocol.Request
+		if err := json.NewDecoder(request.Body).Decode(&rpcRequest); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		writer.Header().Set("Content-Type", protocol.MediaTypeSSE)
+		for _, message := range []any{
+			protocol.Notification{
+				JSONRPC: "2.0",
+				Method:  "notifications/progress",
+				Params:  json.RawMessage(`{"progressToken":"demo","progress":1}`),
+			},
+			protocol.Response{
+				JSONRPC: "2.0",
+				ID:      rpcRequest.ID,
+				Result:  json.RawMessage(`{"resultType":"complete"}`),
+			},
+		} {
+			encoded, err := json.Marshal(message)
+			if err != nil {
+				t.Errorf("encode SSE message: %v", err)
+				return
+			}
+			if _, err := fmt.Fprintf(writer, "data: %s\n\n", encoded); err != nil {
+				t.Errorf("write SSE message: %v", err)
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	params, err := json.Marshal(protocol.RequestParams{Meta: clientRequestMeta()})
+	if err != nil {
+		t.Fatalf("encode params: %v", err)
+	}
+	client := &httpRPCClient{ctx: ctx, endpoint: server.URL, client: http.DefaultClient}
+	response, err := client.call(protocol.Request{
+		JSONRPC: "2.0",
+		ID:      protocol.ID(91),
+		Method:  "tools/list",
+		Params:  params,
+	})
+	if err != nil {
+		t.Fatalf("call() error = %v", err)
+	}
+	if response.ID == nil || *response.ID != 91 || len(response.Result) == 0 {
+		t.Fatalf("response = %#v, want final response ID 91", response)
+	}
+}
+
 func TestHTTPToolsSubscriptionRefreshesListOnChange(t *testing.T) {
 	t.Parallel()
 
@@ -174,8 +233,8 @@ func TestHTTPToolsSubscriptionRefreshesListOnChange(t *testing.T) {
 		t.Fatalf("acknowledged method = %q", acknowledged.Method)
 	}
 
-	if err := server.RegisterTool(mcpserver.NewEchoTool("late_echo")); err != nil {
-		t.Fatalf("RegisterTool() error = %v", err)
+	if err := server.RegisterEchoTool("late_echo"); err != nil {
+		t.Fatalf("RegisterEchoTool() error = %v", err)
 	}
 	changed, refreshed, err := subscription.RefreshOnNextToolsListChanged(62)
 	if err != nil {

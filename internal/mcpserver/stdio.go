@@ -50,6 +50,15 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 		subscriptionWriters.Wait()
 	}()
 	subscriptionErrors := make(chan error, 1)
+	reportSubscriptionError := func(err error) {
+		select {
+		case subscriptionErrors <- err:
+		default:
+		}
+		if closer, ok := input.(io.Closer); ok {
+			_ = closer.Close()
+		}
+	}
 
 	for scanner.Scan() {
 		if err := ctx.Err(); err != nil {
@@ -140,15 +149,14 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 						return
 					case <-subscriber.done:
 						return
-					case message := <-subscriber.events:
-						if err := encode(message.value); err != nil {
-							select {
-							case subscriptionErrors <- fmt.Errorf("encode subscription message: %w", err):
-							default:
-							}
-							return
+					case <-subscriber.complete:
+						if err := encode(subscriptionCompleteResponse(subscriptionID)); err != nil {
+							reportSubscriptionError(fmt.Errorf("encode subscription completion: %w", err))
 						}
-						if message.complete {
+						return
+					case message := <-subscriber.events:
+						if err := encode(message); err != nil {
+							reportSubscriptionError(fmt.Errorf("encode subscription message: %w", err))
 							return
 						}
 					}
@@ -166,13 +174,13 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 		}
 	}
 
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("read request: %w", err)
-	}
 	select {
 	case err := <-subscriptionErrors:
 		return err
 	default:
+	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("read request: %w", err)
 	}
 	return nil
 }

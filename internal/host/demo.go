@@ -1,10 +1,12 @@
 package host
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"mime"
 	"net/http"
 	"os/exec"
 
@@ -380,9 +382,23 @@ func (c *httpRPCClient) call(rpcRequest protocol.Request) (protocol.Response, er
 	}
 	defer httpResponse.Body.Close()
 
+	mediaType, _, err := mime.ParseMediaType(httpResponse.Header.Get("Content-Type"))
+	if err != nil {
+		return protocol.Response{}, fmt.Errorf("decode HTTP response content type %q: %w", httpResponse.Header.Get("Content-Type"), err)
+	}
 	var response protocol.Response
-	if err := json.NewDecoder(httpResponse.Body).Decode(&response); err != nil {
-		return protocol.Response{}, fmt.Errorf("decode HTTP response with status %d: %w", httpResponse.StatusCode, err)
+	switch mediaType {
+	case protocol.MediaTypeJSON:
+		if err := json.NewDecoder(httpResponse.Body).Decode(&response); err != nil {
+			return protocol.Response{}, fmt.Errorf("decode HTTP response with status %d: %w", httpResponse.StatusCode, err)
+		}
+	case protocol.MediaTypeSSE:
+		response, err = decodeHTTPSSEResponse(bufio.NewReader(httpResponse.Body), rpcRequest.ID)
+		if err != nil {
+			return protocol.Response{}, fmt.Errorf("decode HTTP SSE response with status %d: %w", httpResponse.StatusCode, err)
+		}
+	default:
+		return protocol.Response{}, fmt.Errorf("unexpected HTTP response content type %q", mediaType)
 	}
 	if response.Error != nil {
 		return response, response.Error
@@ -391,6 +407,33 @@ func (c *httpRPCClient) call(rpcRequest protocol.Request) (protocol.Response, er
 		return response, fmt.Errorf("unexpected HTTP status %d", httpResponse.StatusCode)
 	}
 	return response, nil
+}
+
+func decodeHTTPSSEResponse(reader *bufio.Reader, requestID *int) (protocol.Response, error) {
+	for {
+		raw, err := readSSEData(reader)
+		if err != nil {
+			return protocol.Response{}, err
+		}
+		var envelope struct {
+			ID     *int   `json:"id"`
+			Method string `json:"method"`
+		}
+		if err := json.Unmarshal(raw, &envelope); err != nil {
+			return protocol.Response{}, fmt.Errorf("decode SSE JSON-RPC message: %w", err)
+		}
+		if envelope.Method != "" {
+			continue
+		}
+		if requestID == nil || envelope.ID == nil || *requestID != *envelope.ID {
+			return protocol.Response{}, fmt.Errorf("unexpected SSE response ID %v", envelope.ID)
+		}
+		var response protocol.Response
+		if err := json.Unmarshal(raw, &response); err != nil {
+			return protocol.Response{}, fmt.Errorf("decode SSE JSON-RPC response: %w", err)
+		}
+		return response, nil
+	}
 }
 
 func (c *httpRPCClient) newRequest(rpcRequest protocol.Request) (*http.Request, error) {

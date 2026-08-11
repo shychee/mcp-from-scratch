@@ -130,9 +130,13 @@ func (s *HTTPToolsSubscription) Close() error {
 }
 
 func (s *HTTPToolsSubscription) readSSEData() (json.RawMessage, error) {
+	return readSSEData(s.reader)
+}
+
+func readSSEData(reader *bufio.Reader) (json.RawMessage, error) {
 	var dataLines []string
 	for {
-		line, err := s.reader.ReadString('\n')
+		line, err := reader.ReadString('\n')
 		if err != nil && len(line) == 0 {
 			return nil, err
 		}

@@ -21,22 +21,22 @@ type subscriptionMeta struct {
 	SubscriptionID int `json:"io.modelcontextprotocol/subscriptionId"`
 }
 
-type subscriptionMessage struct {
-	value    any
-	complete bool
-}
-
 type subscription struct {
 	id            int
 	notifications subscriptionFilter
-	events        chan subscriptionMessage
+	events        chan protocol.Notification
+	complete      chan struct{}
 	done          chan struct{}
 	stopOnce      sync.Once
 	completeOnce  sync.Once
 }
 
-// RegisterTool adds a tool and publishes one list-change event to interested subscribers.
-func (s *Server) RegisterTool(registeredTool Tool) error {
+// RegisterEchoTool adds a named echo tool and publishes a list-change event.
+func (s *Server) RegisterEchoTool(name string) error {
+	return s.registerTool(newEchoTool(name))
+}
+
+func (s *Server) registerTool(registeredTool Tool) error {
 	if registeredTool == nil {
 		return fmt.Errorf("register tool: nil tool")
 	}
@@ -62,7 +62,7 @@ func (s *Server) RegisterTool(registeredTool Tool) error {
 	s.mu.Unlock()
 
 	for _, subscriber := range subscribers {
-		subscriber.send(subscriptionMessage{value: toolsListChangedNotification(subscriber.id)})
+		subscriber.notify(toolsListChangedNotification(subscriber.id))
 	}
 	return nil
 }
@@ -85,7 +85,8 @@ func (s *Server) subscribe(id *int, rawParams json.RawMessage) (*subscription, p
 	subscriber := &subscription{
 		id:            *id,
 		notifications: agreed,
-		events:        make(chan subscriptionMessage, 4),
+		events:        make(chan protocol.Notification, 1),
+		complete:      make(chan struct{}),
 		done:          make(chan struct{}),
 	}
 
@@ -117,24 +118,16 @@ func (s *Server) CloseSubscriptions() {
 	s.mu.RUnlock()
 	for _, subscriber := range subscribers {
 		subscriber.completeOnce.Do(func() {
-			subscriber.send(subscriptionMessage{
-				value:    subscriptionCompleteResponse(subscriber.id),
-				complete: true,
-			})
+			close(subscriber.complete)
 		})
 	}
 }
 
-func (s *Server) activeSubscriptionCount() int {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return len(s.subscriptions)
-}
-
-func (s *subscription) send(message subscriptionMessage) {
+func (s *subscription) notify(message protocol.Notification) {
 	select {
 	case s.events <- message:
 	case <-s.done:
+	default:
 	}
 }
 

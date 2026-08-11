@@ -36,8 +36,8 @@ func TestHTTPSubscriptionAcknowledgesBeforeToolsListChanged(t *testing.T) {
 		t.Fatalf("acknowledged notifications = %#v, want toolsListChanged", ackParams.Notifications)
 	}
 
-	if err := server.RegisterTool(NewEchoTool("late_echo")); err != nil {
-		t.Fatalf("RegisterTool() error = %v", err)
+	if err := server.RegisterEchoTool("late_echo"); err != nil {
+		t.Fatalf("RegisterEchoTool() error = %v", err)
 	}
 	changed := readSSEJSON(t, reader)
 	assertSubscriptionNotification(t, changed, "notifications/tools/list_changed", 41)
@@ -64,8 +64,8 @@ func TestSubscriptionDoesNotPublishUnrequestedNotificationTypes(t *testing.T) {
 		t.Fatalf("agreed notifications = %#v, want empty supported subset", params.Notifications)
 	}
 
-	if err := server.RegisterTool(NewEchoTool("late_echo")); err != nil {
-		t.Fatalf("RegisterTool() error = %v", err)
+	if err := server.RegisterEchoTool("late_echo"); err != nil {
+		t.Fatalf("RegisterEchoTool() error = %v", err)
 	}
 	select {
 	case message := <-subscription.events:
@@ -103,8 +103,8 @@ func TestSubscriptionPublishesOneTaggedEventPerConcurrentListener(t *testing.T) 
 	}
 	defer server.unsubscribe(second)
 
-	if err := server.RegisterTool(NewEchoTool("late_echo")); err != nil {
-		t.Fatalf("RegisterTool() error = %v", err)
+	if err := server.RegisterEchoTool("late_echo"); err != nil {
+		t.Fatalf("RegisterEchoTool() error = %v", err)
 	}
 	for _, tt := range []struct {
 		name       string
@@ -116,13 +116,78 @@ func TestSubscriptionPublishesOneTaggedEventPerConcurrentListener(t *testing.T) 
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			message := <-tt.subscriber.events
-			assertSubscriptionNotification(t, mustMarshal(message.value), "notifications/tools/list_changed", tt.id)
+			assertSubscriptionNotification(t, mustMarshal(message), "notifications/tools/list_changed", tt.id)
 			select {
 			case extra := <-tt.subscriber.events:
 				t.Fatalf("extra subscription event = %#v, want exactly one", extra)
 			default:
 			}
 		})
+	}
+}
+
+func TestSubscriptionCoalescesChangesWithoutBlockingRegistry(t *testing.T) {
+	server := New()
+	subscriber, _, err := server.subscribe(protocol.ID(73), modernRequestParamsWithNotifications(t, map[string]any{
+		"toolsListChanged": true,
+	}))
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer server.unsubscribe(subscriber)
+
+	done := make(chan error, 1)
+	go func() {
+		for _, name := range []string{"late_1", "late_2", "late_3", "late_4", "late_5", "late_6"} {
+			if err := server.RegisterEchoTool(name); err != nil {
+				done <- err
+				return
+			}
+		}
+		server.CloseSubscriptions()
+		done <- nil
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("registry update: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("registry update or graceful close blocked on unread subscriber")
+	}
+	select {
+	case <-subscriber.complete:
+	default:
+		t.Fatal("subscription completion signal is not closed")
+	}
+	if got := len(subscriber.events); got != 1 {
+		t.Fatalf("coalesced pending events = %d, want 1", got)
+	}
+}
+
+func TestRequestTrafficDoesNotUseListenStream(t *testing.T) {
+	server := New()
+	subscriber, _, err := server.subscribe(protocol.ID(74), modernRequestParamsWithNotifications(t, map[string]any{
+		"toolsListChanged": true,
+	}))
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer server.unsubscribe(subscriber)
+
+	response := server.Handle(context.Background(), protocol.Request{
+		JSONRPC: "2.0",
+		ID:      protocol.ID(75),
+		Method:  "tools/call",
+		Params:  modernRequestParams(t, `{"name":"echo","arguments":{"text":"request scoped"}}`),
+	})
+	if response.Error != nil || len(response.Result) == 0 {
+		t.Fatalf("tools/call response = %#v, want result on request path", response)
+	}
+	select {
+	case message := <-subscriber.events:
+		t.Fatalf("request traffic leaked onto listen stream: %#v", message)
+	default:
 	}
 }
 
@@ -136,13 +201,13 @@ func TestHTTPSubscriptionDisconnectCleansUp(t *testing.T) {
 	response := openHTTPSubscription(t, ctx, httpServer.URL, 43, `{"toolsListChanged":true}`)
 	reader := bufio.NewReader(response.Body)
 	_ = readSSEJSON(t, reader)
-	if got := server.activeSubscriptionCount(); got != 1 {
+	if got := activeSubscriptionCount(server); got != 1 {
 		t.Fatalf("active subscriptions = %d, want 1", got)
 	}
 	if err := response.Body.Close(); err != nil {
 		t.Fatalf("close subscription response: %v", err)
 	}
-	eventually(t, func() bool { return server.activeSubscriptionCount() == 0 })
+	eventually(t, func() bool { return activeSubscriptionCount(server) == 0 })
 }
 
 func TestHTTPSubscriptionGracefulCloseSendsCompleteResult(t *testing.T) {
@@ -175,7 +240,7 @@ func TestHTTPSubscriptionGracefulCloseSendsCompleteResult(t *testing.T) {
 	if rpcResponse.Result.Meta.SubscriptionID != 44 {
 		t.Fatalf("complete subscription ID = %d, want 44", rpcResponse.Result.Meta.SubscriptionID)
 	}
-	eventually(t, func() bool { return server.activeSubscriptionCount() == 0 })
+	eventually(t, func() bool { return activeSubscriptionCount(server) == 0 })
 }
 
 func TestServeSubscriptionAcknowledgesPublishesAndCancels(t *testing.T) {
@@ -207,8 +272,8 @@ func TestServeSubscriptionAcknowledgesPublishesAndCancels(t *testing.T) {
 	}
 	assertSubscriptionNotification(t, mustMarshal(acknowledged), "notifications/subscriptions/acknowledged", 51)
 
-	if err := server.RegisterTool(NewEchoTool("late_echo")); err != nil {
-		t.Fatalf("RegisterTool() error = %v", err)
+	if err := server.RegisterEchoTool("late_echo"); err != nil {
+		t.Fatalf("RegisterEchoTool() error = %v", err)
 	}
 	var changed protocol.Notification
 	if err := decoder.Decode(&changed); err != nil {
@@ -236,9 +301,61 @@ func TestServeSubscriptionAcknowledgesPublishesAndCancels(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("Serve() did not stop after input closed")
 	}
-	if got := server.activeSubscriptionCount(); got != 0 {
+	if got := activeSubscriptionCount(server); got != 0 {
 		t.Fatalf("active subscriptions = %d, want 0", got)
 	}
+}
+
+func TestServeReturnsSubscriptionWriteErrorWithoutWaitingForInputEOF(t *testing.T) {
+	server := New()
+	inputReader, inputWriter := io.Pipe()
+	defer inputWriter.Close()
+	output := &failAfterFirstWrite{firstWrite: make(chan struct{})}
+	serveDone := make(chan error, 1)
+	go func() {
+		serveDone <- server.Serve(context.Background(), inputReader, output)
+	}()
+
+	if err := json.NewEncoder(inputWriter).Encode(protocol.Request{
+		JSONRPC: "2.0",
+		ID:      protocol.ID(76),
+		Method:  "subscriptions/listen",
+		Params: modernRequestParamsWithNotifications(t, map[string]any{
+			"toolsListChanged": true,
+		}),
+	}); err != nil {
+		t.Fatalf("encode listen request: %v", err)
+	}
+	select {
+	case <-output.firstWrite:
+	case <-time.After(time.Second):
+		t.Fatal("subscription acknowledgement was not written")
+	}
+	if err := server.RegisterEchoTool("late_echo"); err != nil {
+		t.Fatalf("RegisterEchoTool() error = %v", err)
+	}
+	select {
+	case err := <-serveDone:
+		if err == nil || !strings.Contains(err.Error(), "encode subscription message") {
+			t.Fatalf("Serve() error = %v, want subscription message write error", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Serve() waited for input EOF after subscription write failed")
+	}
+}
+
+type failAfterFirstWrite struct {
+	writes     int
+	firstWrite chan struct{}
+}
+
+func (w *failAfterFirstWrite) Write(data []byte) (int, error) {
+	w.writes++
+	if w.writes == 1 {
+		close(w.firstWrite)
+		return len(data), nil
+	}
+	return 0, io.ErrClosedPipe
 }
 
 func openHTTPSubscription(t *testing.T, ctx context.Context, endpoint string, id int, notifications string) *http.Response {
@@ -354,4 +471,10 @@ func eventually(t *testing.T, condition func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("condition was not satisfied before timeout")
+}
+
+func activeSubscriptionCount(server *Server) int {
+	server.mu.RLock()
+	defer server.mu.RUnlock()
+	return len(server.subscriptions)
 }

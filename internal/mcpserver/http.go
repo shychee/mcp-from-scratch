@@ -2,6 +2,8 @@ package mcpserver
 
 import (
 	"encoding/json"
+	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"strings"
@@ -24,13 +26,24 @@ func (s *Server) serveHTTP(writer http.ResponseWriter, request *http.Request) {
 		writer.WriteHeader(http.StatusForbidden)
 		return
 	}
+	if !hasMediaType(request.Header.Get("Content-Type"), protocol.MediaTypeJSON) {
+		writer.WriteHeader(http.StatusUnsupportedMediaType)
+		return
+	}
+	if !acceptsMediaType(request.Header.Values("Accept"), protocol.MediaTypeJSON) ||
+		!acceptsMediaType(request.Header.Values("Accept"), protocol.MediaTypeSSE) {
+		writer.WriteHeader(http.StatusNotAcceptable)
+		return
+	}
 
+	decoder := json.NewDecoder(request.Body)
 	var rpcRequest protocol.Request
-	if err := json.NewDecoder(request.Body).Decode(&rpcRequest); err != nil {
-		writeHTTPRPCResponse(writer, http.StatusBadRequest, protocol.Response{
-			JSONRPC: "2.0",
-			Error:   protocol.NewError(protocol.CodeParseError, "parse error"),
-		})
+	if err := decoder.Decode(&rpcRequest); err != nil {
+		writeHTTPParseError(writer)
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		writeHTTPParseError(writer)
 		return
 	}
 	if requestError := protocol.ValidateRequest(rpcRequest); requestError != nil {
@@ -46,6 +59,13 @@ func (s *Server) serveHTTP(writer http.ResponseWriter, request *http.Request) {
 			JSONRPC: "2.0",
 			ID:      rpcRequest.ID,
 			Error:   headerError,
+		})
+		return
+	}
+	if rpcRequest.Method == "subscriptions/listen" && rpcRequest.ID == nil {
+		writeHTTPRPCResponse(writer, http.StatusBadRequest, protocol.Response{
+			JSONRPC: "2.0",
+			Error:   protocol.NewError(protocol.CodeInvalidRequest, "subscriptions/listen requires a request ID"),
 		})
 		return
 	}
@@ -67,17 +87,21 @@ func (s *Server) serveHTTP(writer http.ResponseWriter, request *http.Request) {
 			status = http.StatusNotFound
 		case protocol.CodeUnsupportedProtocolVersion:
 			status = http.StatusBadRequest
+		case protocol.CodeMissingRequiredClientCapability:
+			status = http.StatusBadRequest
 		}
 	}
 	writeHTTPRPCResponse(writer, status, response)
 }
 
+func writeHTTPParseError(writer http.ResponseWriter) {
+	writeHTTPRPCResponse(writer, http.StatusBadRequest, protocol.Response{
+		JSONRPC: "2.0",
+		Error:   protocol.NewError(protocol.CodeParseError, "parse error"),
+	})
+}
+
 func (s *Server) serveHTTPSubscription(writer http.ResponseWriter, request *http.Request, rpcRequest protocol.Request) {
-	if !acceptsMediaType(request.Header.Values("Accept"), protocol.MediaTypeJSON) ||
-		!acceptsMediaType(request.Header.Values("Accept"), protocol.MediaTypeSSE) {
-		writer.WriteHeader(http.StatusNotAcceptable)
-		return
-	}
 	flusher, ok := writer.(http.Flusher)
 	if !ok {
 		writer.WriteHeader(http.StatusInternalServerError)
@@ -107,16 +131,24 @@ func (s *Server) serveHTTPSubscription(writer http.ResponseWriter, request *http
 		select {
 		case <-request.Context().Done():
 			return
-		case message := <-subscriber.events:
-			if err := writeSSEMessage(writer, message.value); err != nil {
+		case <-subscriber.complete:
+			if err := writeSSEMessage(writer, subscriptionCompleteResponse(subscriber.id)); err != nil {
 				return
 			}
 			flusher.Flush()
-			if message.complete {
+			return
+		case message := <-subscriber.events:
+			if err := writeSSEMessage(writer, message); err != nil {
 				return
 			}
+			flusher.Flush()
 		}
 	}
+}
+
+func hasMediaType(value, wanted string) bool {
+	mediaType, _, err := mime.ParseMediaType(value)
+	return err == nil && strings.EqualFold(mediaType, wanted)
 }
 
 func acceptsMediaType(values []string, wanted string) bool {

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/shychee/mcp-from-scratch/internal/protocol"
@@ -100,6 +101,103 @@ func TestHTTPHandlerRejectsUnsupportedVersion(t *testing.T) {
 	if !ok || data["requested"] != "2099-01-01" {
 		t.Fatalf("error data = %#v, want requested version", rpcResponse.Error.Data)
 	}
+}
+
+func TestHTTPHandlerUsesMissingCapabilityError(t *testing.T) {
+	t.Parallel()
+
+	request := modernHTTPRequest(t, 1, "tools/call", `{"name":"confirm_preview","arguments":{"preview":"demo"}}`)
+	request.Header.Set(protocol.HeaderName, "confirm_preview")
+	response := httptest.NewRecorder()
+	New().HTTPHandler().ServeHTTP(response, request)
+
+	assertHTTPRPCError(t, response, http.StatusBadRequest, protocol.CodeMissingRequiredClientCapability)
+	var rpcResponse protocol.Response
+	if err := json.Unmarshal(response.Body.Bytes(), &rpcResponse); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	data, ok := rpcResponse.Error.Data.(map[string]any)
+	if !ok || data["requiredCapabilities"] == nil {
+		t.Fatalf("error data = %#v, want requiredCapabilities", rpcResponse.Error.Data)
+	}
+}
+
+func TestHTTPHandlerRejectsTrailingJSON(t *testing.T) {
+	t.Parallel()
+
+	for _, suffix := range []string{` {}`, ` trailing`} {
+		t.Run(suffix, func(t *testing.T) {
+			t.Parallel()
+			request := modernHTTPRequest(t, 1, "tools/list", `{}`)
+			body := requestBody(t, 1, "tools/list", `{}`, protocol.Version20260728)
+			request.Body = io.NopCloser(io.MultiReader(body, strings.NewReader(suffix)))
+			response := httptest.NewRecorder()
+			New().HTTPHandler().ServeHTTP(response, request)
+
+			assertHTTPRPCError(t, response, http.StatusBadRequest, protocol.CodeParseError)
+		})
+	}
+}
+
+func TestHTTPHandlerRejectsInvalidMediaNegotiation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		mutate     func(*http.Request)
+		wantStatus int
+	}{
+		{
+			name: "wrong content type",
+			mutate: func(request *http.Request) {
+				request.Header.Set("Content-Type", "text/plain")
+			},
+			wantStatus: http.StatusUnsupportedMediaType,
+		},
+		{
+			name: "missing JSON accept",
+			mutate: func(request *http.Request) {
+				request.Header.Set("Accept", protocol.MediaTypeSSE)
+			},
+			wantStatus: http.StatusNotAcceptable,
+		},
+		{
+			name: "missing SSE accept",
+			mutate: func(request *http.Request) {
+				request.Header.Set("Accept", protocol.MediaTypeJSON)
+			},
+			wantStatus: http.StatusNotAcceptable,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			request := modernHTTPRequest(t, 1, "tools/list", `{}`)
+			tt.mutate(request)
+			response := httptest.NewRecorder()
+			New().HTTPHandler().ServeHTTP(response, request)
+			if response.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", response.Code, tt.wantStatus)
+			}
+		})
+	}
+}
+
+func TestHTTPHandlerRejectsListenNotification(t *testing.T) {
+	t.Parallel()
+
+	request := modernHTTPRequest(t, 1, "subscriptions/listen", `{}`)
+	request.Body = io.NopCloser(bytes.NewReader(mustMarshal(protocol.Notification{
+		JSONRPC: "2.0",
+		Method:  "subscriptions/listen",
+		Params: modernRequestParamsWithNotifications(t, map[string]any{
+			"toolsListChanged": true,
+		}),
+	})))
+	response := httptest.NewRecorder()
+	New().HTTPHandler().ServeHTTP(response, request)
+
+	assertHTTPRPCError(t, response, http.StatusBadRequest, protocol.CodeInvalidRequest)
 }
 
 func TestHTTPHandlerUsesModernStatusForUnknownMethod(t *testing.T) {

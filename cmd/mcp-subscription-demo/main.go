@@ -26,7 +26,7 @@ func main() {
 	defer subscription.Close()
 	printJSON("subscription acknowledged", subscription.Acknowledged())
 
-	if err := server.RegisterTool(mcpserver.NewEchoTool("late_echo")); err != nil {
+	if err := server.RegisterEchoTool("late_echo"); err != nil {
 		fail("register late_echo", err)
 	}
 	changed, refreshed, err := subscription.RefreshOnNextToolsListChanged(101)
