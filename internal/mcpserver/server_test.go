@@ -81,6 +81,9 @@ func TestServer_DiscoverReturnsSupportedVersionAndServerInfo(t *testing.T) {
 	if result.Capabilities.Tools == nil {
 		t.Fatal("capabilities.tools = nil, want object")
 	}
+	if result.Capabilities.Tools["listChanged"] != true {
+		t.Fatalf("capabilities.tools.listChanged = %v, want true", result.Capabilities.Tools["listChanged"])
+	}
 	if result.TTLMillis != 3600000 {
 		t.Fatalf("ttlMs = %d, want 3600000", result.TTLMillis)
 	}

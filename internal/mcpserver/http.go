@@ -49,6 +49,10 @@ func (s *Server) serveHTTP(writer http.ResponseWriter, request *http.Request) {
 		})
 		return
 	}
+	if rpcRequest.Method == "subscriptions/listen" {
+		s.serveHTTPSubscription(writer, request, rpcRequest)
+		return
+	}
 
 	response := s.Handle(request.Context(), rpcRequest)
 	if rpcRequest.ID == nil {
@@ -66,6 +70,74 @@ func (s *Server) serveHTTP(writer http.ResponseWriter, request *http.Request) {
 		}
 	}
 	writeHTTPRPCResponse(writer, status, response)
+}
+
+func (s *Server) serveHTTPSubscription(writer http.ResponseWriter, request *http.Request, rpcRequest protocol.Request) {
+	if !acceptsMediaType(request.Header.Values("Accept"), protocol.MediaTypeJSON) ||
+		!acceptsMediaType(request.Header.Values("Accept"), protocol.MediaTypeSSE) {
+		writer.WriteHeader(http.StatusNotAcceptable)
+		return
+	}
+	flusher, ok := writer.(http.Flusher)
+	if !ok {
+		writer.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	subscriber, acknowledged, err := s.subscribe(rpcRequest.ID, rpcRequest.Params)
+	if err != nil {
+		writeHTTPRPCResponse(writer, http.StatusOK, protocol.Response{
+			JSONRPC: "2.0",
+			ID:      rpcRequest.ID,
+			Error:   err,
+		})
+		return
+	}
+	defer s.unsubscribe(subscriber)
+
+	writer.Header().Set("Content-Type", protocol.MediaTypeSSE)
+	writer.Header().Set("Cache-Control", "no-cache")
+	writer.WriteHeader(http.StatusOK)
+	if err := writeSSEMessage(writer, acknowledged); err != nil {
+		return
+	}
+	flusher.Flush()
+
+	for {
+		select {
+		case <-request.Context().Done():
+			return
+		case message := <-subscriber.events:
+			if err := writeSSEMessage(writer, message.value); err != nil {
+				return
+			}
+			flusher.Flush()
+			if message.complete {
+				return
+			}
+		}
+	}
+}
+
+func acceptsMediaType(values []string, wanted string) bool {
+	for _, value := range values {
+		for _, part := range strings.Split(value, ",") {
+			mediaType := strings.TrimSpace(strings.SplitN(part, ";", 2)[0])
+			if strings.EqualFold(mediaType, wanted) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func writeSSEMessage(writer http.ResponseWriter, value any) error {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	_, err = writer.Write(append(append([]byte("data: "), data...), '\n', '\n'))
+	return err
 }
 
 func validateHTTPHeaders(request *http.Request, rpcRequest protocol.Request) *protocol.Error {
@@ -96,7 +168,7 @@ func validateHTTPHeaders(request *http.Request, rpcRequest protocol.Request) *pr
 	if headerMethod := request.Header.Get(protocol.HeaderMethod); headerMethod == "" || headerMethod != rpcRequest.Method {
 		return protocol.NewError(protocol.CodeHeaderMismatch, "MCP transport header mismatch")
 	}
-	if methodHasName(rpcRequest.Method) {
+	if protocol.MethodUsesNameHeader(rpcRequest.Method) {
 		expectedName := params.Name
 		if rpcRequest.Method == "resources/read" {
 			expectedName = params.URI
@@ -106,15 +178,6 @@ func validateHTTPHeaders(request *http.Request, rpcRequest protocol.Request) *pr
 		}
 	}
 	return nil
-}
-
-func methodHasName(method string) bool {
-	switch method {
-	case "tools/call", "resources/read", "prompts/get":
-		return true
-	default:
-		return false
-	}
 }
 
 func validRequestOrigin(request *http.Request) bool {

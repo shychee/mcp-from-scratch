@@ -14,6 +14,7 @@ subset of MCP `2026-07-28` over JSON-RPC, stdio, and stateless Streamable HTTP:
 - complete result envelopes, with cache hints on discovery and list results
 - one stateless MRTR form-elicitation flow with integrity-checked request state
 - one POST-only Streamable HTTP endpoint with modern transport-header checks
+- `subscriptions/listen` for opt-in tool-list change delivery
 - `tools/list`
 - `tools/call`
 - JSON-RPC parse errors, invalid request errors, method-not-found errors, and
@@ -27,15 +28,15 @@ tracked in issues
 [#10](https://github.com/shychee/mcp-from-scratch/issues/10) through
 [#24](https://github.com/shychee/mcp-from-scratch/issues/24).
 
-The first three core steps are complete: session initialization has been replaced
+The first five core steps are complete: session initialization has been replaced
 by stateless `server/discover`, every request is validated independently, and
 successful responses use complete result envelopes. The `confirm_preview` tool
 demonstrates MRTR by returning an embedded `elicitation/create` input request,
 then completing when the host retries with the exact request state and explicit
-input response. The same dispatcher is now available over stateless Streamable
-HTTP; `subscriptions/listen` is next. OAuth,
-Tasks, extensions, tracing, and interoperability work build on that core instead
-of blocking it.
+input response. The same dispatcher is available over stateless Streamable HTTP,
+and hosts can refresh their registry after an acknowledged
+`subscriptions/listen` event. OAuth, Tasks, extensions, tracing, and
+interoperability work build on that core instead of blocking it.
 
 See [the learning roadmap](docs/learning-roadmap.md) for the ordered migration,
 compatibility boundaries, and links to the official specification.
@@ -69,6 +70,12 @@ cmd/mcp-http-demo
   sends each JSON-RPC request in an independent POST
   mirrors protocol version, method, and tool name in the required headers
   runs the same discovery and tool-call flow as the stdio host
+
+cmd/mcp-subscription-demo
+  opens an HTTP subscriptions/listen SSE response
+  verifies the first message is the tagged acknowledgement
+  registers late_echo and receives one tagged tools/list_changed notification
+  refreshes tools/list on the host
 ```
 
 ## Run It
@@ -78,6 +85,9 @@ make demo
 
 # Run the same flow over stateless Streamable HTTP.
 make demo-http
+
+# Show acknowledgement, registry change, and host refresh.
+make demo-subscriptions
 ```
 
 The demo prints each request and response:
@@ -123,8 +133,7 @@ make test
 The tests are intentionally split by learning boundary:
 
 - `internal/mcpserver` tests the server protocol behavior directly.
-- `internal/host` starts a real server subprocess and verifies stdio JSON-RPC
-  round trips.
+- `internal/host` verifies real stdio subprocess and HTTP/SSE round trips.
 
 ## What This Implements
 
@@ -152,6 +161,12 @@ This project currently implements a deliberately small JSON-RPC model:
   and named-method `Mcp-Name` validation against each JSON-RPC body
 - modern HTTP status mapping for header mismatch, unsupported version, and
   method-not-found errors; no session ID is minted or echoed
+- ACK-first `subscriptions/listen` streams that reuse the listen request ID,
+  deliver only explicitly accepted tool-list events, and support concurrent IDs
+- discovery advertises the implemented event with `tools.listChanged: true`
+- HTTP disconnect and stdio `notifications/cancelled` cleanup, plus graceful
+  server completion before stream close
+- host refresh of `tools/list` after a tagged `notifications/tools/list_changed`
 - tool descriptions and calls backed by a small server-side registry
 - defensive validation for missing, unknown, and malformed tool call arguments
 - host-side tool discovery, fake model tool selection, and a transcript of

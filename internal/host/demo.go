@@ -369,20 +369,9 @@ func (c *rpcClient) call(request protocol.Request) (protocol.Response, error) {
 }
 
 func (c *httpRPCClient) call(rpcRequest protocol.Request) (protocol.Response, error) {
-	body, err := json.Marshal(rpcRequest)
+	request, err := c.newRequest(rpcRequest)
 	if err != nil {
-		return protocol.Response{}, fmt.Errorf("encode request: %w", err)
-	}
-	request, err := http.NewRequestWithContext(c.ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
-	if err != nil {
-		return protocol.Response{}, fmt.Errorf("create HTTP request: %w", err)
-	}
-	request.Header.Set("Content-Type", protocol.MediaTypeJSON)
-	request.Header.Set("Accept", protocol.MediaTypeJSON+", "+protocol.MediaTypeSSE)
-	request.Header.Set(protocol.HeaderProtocolVersion, protocol.Version20260728)
-	request.Header.Set(protocol.HeaderMethod, rpcRequest.Method)
-	if name, ok := requestName(rpcRequest); ok {
-		request.Header.Set(protocol.HeaderName, name)
+		return protocol.Response{}, err
 	}
 
 	httpResponse, err := c.client.Do(request)
@@ -404,8 +393,27 @@ func (c *httpRPCClient) call(rpcRequest protocol.Request) (protocol.Response, er
 	return response, nil
 }
 
+func (c *httpRPCClient) newRequest(rpcRequest protocol.Request) (*http.Request, error) {
+	body, err := json.Marshal(rpcRequest)
+	if err != nil {
+		return nil, fmt.Errorf("encode request: %w", err)
+	}
+	request, err := http.NewRequestWithContext(c.ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("create HTTP request: %w", err)
+	}
+	request.Header.Set("Content-Type", protocol.MediaTypeJSON)
+	request.Header.Set("Accept", protocol.MediaTypeJSON+", "+protocol.MediaTypeSSE)
+	request.Header.Set(protocol.HeaderProtocolVersion, protocol.Version20260728)
+	request.Header.Set(protocol.HeaderMethod, rpcRequest.Method)
+	if name, ok := requestName(rpcRequest); ok {
+		request.Header.Set(protocol.HeaderName, name)
+	}
+	return request, nil
+}
+
 func requestName(request protocol.Request) (string, bool) {
-	if request.Method != "tools/call" && request.Method != "resources/read" && request.Method != "prompts/get" {
+	if !protocol.MethodUsesNameHeader(request.Method) {
 		return "", false
 	}
 	var params struct {

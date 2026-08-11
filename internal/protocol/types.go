@@ -78,6 +78,13 @@ type Request struct {
 	Params  json.RawMessage `json:"params,omitempty"`
 }
 
+// Notification is a JSON-RPC message that does not carry an ID or receive a response.
+type Notification struct {
+	JSONRPC string          `json:"jsonrpc"`
+	Method  string          `json:"method"`
+	Params  json.RawMessage `json:"params,omitempty"`
+}
+
 // ValidateRequest checks the JSON-RPC envelope before MCP method dispatch.
 func ValidateRequest(request Request) *Error {
 	if request.JSONRPC != "2.0" {
@@ -101,6 +108,16 @@ type Response struct {
 // ID returns a pointer for JSON-RPC request and response IDs.
 func ID(value int) *int {
 	return &value
+}
+
+// MethodUsesNameHeader reports whether Streamable HTTP mirrors a name or URI.
+func MethodUsesNameHeader(method string) bool {
+	switch method {
+	case "tools/call", "resources/read", "prompts/get":
+		return true
+	default:
+		return false
+	}
 }
 
 // Error follows the JSON-RPC 2.0 error object shape.

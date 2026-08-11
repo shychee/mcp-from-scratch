@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"sync"
 
 	"github.com/shychee/mcp-from-scratch/internal/protocol"
 )
@@ -23,7 +24,9 @@ type Tool interface {
 }
 
 type Server struct {
-	tools []Tool
+	mu            sync.RWMutex
+	tools         []Tool
+	subscriptions map[*subscription]struct{}
 }
 
 type discoverResult struct {
@@ -85,10 +88,11 @@ type echoArguments struct {
 
 func New(tools ...Tool) *Server {
 	if len(tools) == 0 {
-		tools = []Tool{echoTool{}, confirmPreviewTool{}}
+		tools = []Tool{NewEchoTool("echo"), confirmPreviewTool{}}
 	}
 	return &Server{
-		tools: tools,
+		tools:         append([]Tool(nil), tools...),
+		subscriptions: make(map[*subscription]struct{}),
 	}
 }
 
@@ -113,12 +117,13 @@ func (s *Server) Handle(_ context.Context, request protocol.Request) protocol.Re
 			},
 			SupportedVersions: []string{protocolVersion},
 			Capabilities: capabilities{
-				Tools: map[string]any{},
+				Tools: map[string]any{"listChanged": true},
 			},
 		})
 	case "tools/list":
-		tools := make([]tool, 0, len(s.tools))
-		for _, t := range s.tools {
+		registeredTools := s.toolSnapshot()
+		tools := make([]tool, 0, len(registeredTools))
+		for _, t := range registeredTools {
 			tools = append(tools, t.Definition())
 		}
 		sort.Slice(tools, func(i, j int) bool {
@@ -183,11 +188,18 @@ func validateRequestMetadata(raw json.RawMessage) *protocol.Error {
 	return nil
 }
 
-type echoTool struct{}
+type echoTool struct {
+	name string
+}
 
-func (echoTool) Definition() tool {
+// NewEchoTool returns an echo tool that can be registered at runtime.
+func NewEchoTool(name string) Tool {
+	return echoTool{name: name}
+}
+
+func (t echoTool) Definition() tool {
 	return tool{
-		Name:        "echo",
+		Name:        t.name,
 		Description: "Return the text argument back to the caller.",
 		InputSchema: map[string]any{
 			"type": "object",
@@ -226,7 +238,7 @@ func (s *Server) callTool(raw json.RawMessage) (toolCallResult, error) {
 		return toolCallResult{}, fmt.Errorf("missing tool name")
 	}
 
-	for _, registeredTool := range s.tools {
+	for _, registeredTool := range s.toolSnapshot() {
 		definition := registeredTool.Definition()
 		if definition.Name == params.Name {
 			if err := validateToolArguments(definition, params.Arguments); err != nil {
@@ -242,6 +254,12 @@ func (s *Server) callTool(raw json.RawMessage) (toolCallResult, error) {
 	}
 
 	return toolCallResult{}, fmt.Errorf("unknown tool %q", params.Name)
+}
+
+func (s *Server) toolSnapshot() []Tool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return append([]Tool(nil), s.tools...)
 }
 
 func validateToolArguments(definition tool, raw json.RawMessage) error {

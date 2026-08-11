@@ -156,6 +156,43 @@ func TestRunHTTPDemoTalksToStatelessServer(t *testing.T) {
 	}
 }
 
+func TestHTTPToolsSubscriptionRefreshesListOnChange(t *testing.T) {
+	t.Parallel()
+
+	server := mcpserver.New()
+	httpServer := httptest.NewServer(server.HTTPHandler())
+	defer httpServer.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	subscription, err := OpenHTTPToolsSubscription(ctx, httpServer.URL, 61)
+	if err != nil {
+		t.Fatalf("OpenHTTPToolsSubscription() error = %v", err)
+	}
+	defer subscription.Close()
+	if acknowledged := subscription.Acknowledged(); acknowledged.Method != "notifications/subscriptions/acknowledged" {
+		t.Fatalf("acknowledged method = %q", acknowledged.Method)
+	}
+
+	if err := server.RegisterTool(mcpserver.NewEchoTool("late_echo")); err != nil {
+		t.Fatalf("RegisterTool() error = %v", err)
+	}
+	changed, refreshed, err := subscription.RefreshOnNextToolsListChanged(62)
+	if err != nil {
+		t.Fatalf("RefreshOnNextToolsListChanged() error = %v", err)
+	}
+	if changed.Method != "notifications/tools/list_changed" {
+		t.Fatalf("changed method = %q", changed.Method)
+	}
+	var listed toolsListResult
+	if err := decodeCompleteResult(refreshed.Result, &listed); err != nil {
+		t.Fatalf("decode refreshed tools/list: %v", err)
+	}
+	if len(listed.Tools) != 3 || listed.Tools[1].Name != "echo" || listed.Tools[2].Name != "late_echo" {
+		t.Fatalf("refreshed tools = %#v, want confirm_preview, echo, late_echo", listed.Tools)
+	}
+}
+
 func TestToolDescriptionsBecomeOpenAICompatibleTools(t *testing.T) {
 	t.Parallel()
 
