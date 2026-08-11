@@ -7,12 +7,13 @@
 stdio 传输方式都保持可见。
 
 它不是完整 MCP 实现。当前里程碑建模了 MCP `2026-07-28` 在 JSON-RPC over
-stdio 上的一个小型子集：
+stdio 和无状态 Streamable HTTP 上的一个小型子集：
 
 - 无状态 `server/discover`
 - 每个请求携带协议版本、客户端 identity 和客户端 capabilities
 - 完整结果信封，以及 discovery/list 结果的缓存提示
 - 一个无状态 MRTR form elicitation 流程，并校验 request state 完整性
+- 一个只接受 POST 的 Streamable HTTP endpoint，并校验现代传输头
 - `tools/list`
 - `tools/call`
 - JSON-RPC parse error、invalid request error、method-not-found error 和
@@ -28,8 +29,8 @@ stdio 上的一个小型子集：
 核心迁移的前三步已经完成：无状态 `server/discover` 已替代会话初始化，每个请求都
 会被独立校验，成功响应使用完整结果信封。`confirm_preview` 工具通过内嵌
 `elicitation/create` input request 演示 MRTR；host 原样带回 request state 和显式
-input response 后，server 才完成调用。下一步依次实现 Streamable HTTP 和
-`subscriptions/listen`。OAuth、Tasks、扩展、trace 和互操作性验证建立在核心协议
+input response 后，server 才完成调用。同一个 dispatcher 现在也能通过无状态
+Streamable HTTP 使用；下一步实现 `subscriptions/listen`。OAuth、Tasks、扩展、trace 和互操作性验证建立在核心协议
 之上，不阻塞核心迁移。
 
 迁移顺序、兼容边界和官方规范链接见
@@ -56,12 +57,21 @@ cmd/mcp-server
   处理 server/discover、tools/list 和 tools/call
   当 confirm_preview 需要用户输入时返回 input_required result
   向 stdout 写 JSON-RPC response
+
+cmd/mcp-http-demo
+  在临时本地 HTTP endpoint 上启动进程内 server
+  每条 JSON-RPC request 使用独立 POST
+  在标准头中镜像协议版本、method 和 tool name
+  运行与 stdio host 相同的 discovery 和 tool-call 流程
 ```
 
 ## 运行 Demo
 
 ```bash
 make demo
+
+# 通过无状态 Streamable HTTP 运行相同流程。
+make demo-http
 ```
 
 demo 会打印每一次 request 和 response：
@@ -131,6 +141,10 @@ make test
   opaque `requestState` 的重试
 - request state 校验绑定 tool name 和 preview arguments，新 server instance 无需隐藏
   session state 即可完成重试
+- 只接受 POST 的 Streamable HTTP dispatch，并按 JSON-RPC body 校验
+  `MCP-Protocol-Version`、`Mcp-Method` 和 named method 的 `Mcp-Name`
+- header mismatch、unsupported version、method not found 使用现代 HTTP 状态映射，
+  server 不创建或回显 session ID
 - `tools/list` 和 `tools/call` 由一个小型 server-side registry 驱动
 - 对 missing、unknown、malformed tool call arguments 做防御性校验
 - host-side tool discovery、fake model tool selection，以及 host/server

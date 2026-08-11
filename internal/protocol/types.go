@@ -10,6 +10,12 @@ const (
 	ResultTypeComplete      = "complete"
 	ResultTypeInputRequired = "input_required"
 	CacheScopePublic        = "public"
+	HeaderProtocolVersion   = "MCP-Protocol-Version"
+	HeaderMethod            = "Mcp-Method"
+	HeaderName              = "Mcp-Name"
+	HeaderSessionID         = "Mcp-Session-Id"
+	MediaTypeJSON           = "application/json"
+	MediaTypeSSE            = "text/event-stream"
 )
 
 // Implementation identifies MCP client or server software.
@@ -59,6 +65,7 @@ const (
 	CodeInvalidParams  ErrorCode = -32602
 	CodeInternalError  ErrorCode = -32603
 
+	CodeHeaderMismatch             ErrorCode = -32020
 	CodeUnsupportedProtocolVersion ErrorCode = -32022
 )
 

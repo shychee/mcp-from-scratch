@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net/http/httptest"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shychee/mcp-from-scratch/internal/mcpserver"
 	"github.com/shychee/mcp-from-scratch/internal/protocol"
 )
 
@@ -129,6 +131,28 @@ func TestRunDemoTalksToServerProcess(t *testing.T) {
 	}
 	if confirmed.ResultType != protocol.ResultTypeComplete || len(confirmed.Content) != 1 {
 		t.Fatalf("confirmation result = %#v, want complete content", confirmed)
+	}
+}
+
+func TestRunHTTPDemoTalksToStatelessServer(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(mcpserver.New().HTTPHandler())
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	transcript, err := RunHTTPDemo(ctx, server.URL)
+	if err != nil {
+		t.Fatalf("RunHTTPDemo() error = %v", err)
+	}
+	if len(transcript.Exchanges) != 5 {
+		t.Fatalf("exchange count = %d, want 5", len(transcript.Exchanges))
+	}
+	for _, exchange := range transcript.Exchanges {
+		if exchange.Response == nil || exchange.Response.Error != nil {
+			t.Fatalf("%s response = %#v, want success", exchange.Name, exchange.Response)
+		}
 	}
 }
 

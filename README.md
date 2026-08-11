@@ -7,12 +7,13 @@ Model Context Protocol style tool use. It intentionally avoids MCP SDKs in the
 first stage so the host/server boundary stays visible.
 
 It is not a complete MCP implementation. The current milestone models a small
-subset of MCP `2026-07-28` over JSON-RPC and stdio:
+subset of MCP `2026-07-28` over JSON-RPC, stdio, and stateless Streamable HTTP:
 
 - stateless `server/discover`
 - protocol version, client identity, and client capabilities on every request
 - complete result envelopes, with cache hints on discovery and list results
 - one stateless MRTR form-elicitation flow with integrity-checked request state
+- one POST-only Streamable HTTP endpoint with modern transport-header checks
 - `tools/list`
 - `tools/call`
 - JSON-RPC parse errors, invalid request errors, method-not-found errors, and
@@ -31,7 +32,8 @@ by stateless `server/discover`, every request is validated independently, and
 successful responses use complete result envelopes. The `confirm_preview` tool
 demonstrates MRTR by returning an embedded `elicitation/create` input request,
 then completing when the host retries with the exact request state and explicit
-input response. Streamable HTTP and `subscriptions/listen` are next. OAuth,
+input response. The same dispatcher is now available over stateless Streamable
+HTTP; `subscriptions/listen` is next. OAuth,
 Tasks, extensions, tracing, and interoperability work build on that core instead
 of blocking it.
 
@@ -61,12 +63,21 @@ cmd/mcp-server
   handles server/discover, tools/list, and tools/call
   returns an input_required result when confirm_preview needs user input
   writes JSON-RPC responses to stdout
+
+cmd/mcp-http-demo
+  starts an in-process server on a temporary local HTTP endpoint
+  sends each JSON-RPC request in an independent POST
+  mirrors protocol version, method, and tool name in the required headers
+  runs the same discovery and tool-call flow as the stdio host
 ```
 
 ## Run It
 
 ```bash
 make demo
+
+# Run the same flow over stateless Streamable HTTP.
+make demo-http
 ```
 
 The demo prints each request and response:
@@ -137,6 +148,10 @@ This project currently implements a deliberately small JSON-RPC model:
   `inputResponses`, and an unchanged opaque `requestState`
 - process-independent request-state validation bound to the tool name and
   preview arguments, without hidden server session state
+- POST-only Streamable HTTP dispatch with `MCP-Protocol-Version`, `Mcp-Method`,
+  and named-method `Mcp-Name` validation against each JSON-RPC body
+- modern HTTP status mapping for header mismatch, unsupported version, and
+  method-not-found errors; no session ID is minted or echoed
 - tool descriptions and calls backed by a small server-side registry
 - defensive validation for missing, unknown, and malformed tool call arguments
 - host-side tool discovery, fake model tool selection, and a transcript of

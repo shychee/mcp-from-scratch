@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os/exec"
 
 	"github.com/shychee/mcp-from-scratch/internal/protocol"
@@ -120,7 +121,27 @@ type rpcClient struct {
 	decoder *json.Decoder
 }
 
-func runProtocolDemo(client *rpcClient) (Transcript, error) {
+type protocolClient interface {
+	call(protocol.Request) (protocol.Response, error)
+}
+
+type httpRPCClient struct {
+	ctx      context.Context
+	endpoint string
+	client   *http.Client
+}
+
+// RunHTTPDemo runs the same stateless protocol flow over Streamable HTTP.
+func RunHTTPDemo(ctx context.Context, endpoint string) (Transcript, error) {
+	client := &httpRPCClient{
+		ctx:      ctx,
+		endpoint: endpoint,
+		client:   http.DefaultClient,
+	}
+	return runProtocolDemo(client)
+}
+
+func runProtocolDemo(client protocolClient) (Transcript, error) {
 	requestParamsJSON, err := json.Marshal(protocol.RequestParams{
 		Meta: clientRequestMeta(),
 	})
@@ -345,6 +366,59 @@ func (c *rpcClient) call(request protocol.Request) (protocol.Response, error) {
 		return response, response.Error
 	}
 	return response, nil
+}
+
+func (c *httpRPCClient) call(rpcRequest protocol.Request) (protocol.Response, error) {
+	body, err := json.Marshal(rpcRequest)
+	if err != nil {
+		return protocol.Response{}, fmt.Errorf("encode request: %w", err)
+	}
+	request, err := http.NewRequestWithContext(c.ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
+	if err != nil {
+		return protocol.Response{}, fmt.Errorf("create HTTP request: %w", err)
+	}
+	request.Header.Set("Content-Type", protocol.MediaTypeJSON)
+	request.Header.Set("Accept", protocol.MediaTypeJSON+", "+protocol.MediaTypeSSE)
+	request.Header.Set(protocol.HeaderProtocolVersion, protocol.Version20260728)
+	request.Header.Set(protocol.HeaderMethod, rpcRequest.Method)
+	if name, ok := requestName(rpcRequest); ok {
+		request.Header.Set(protocol.HeaderName, name)
+	}
+
+	httpResponse, err := c.client.Do(request)
+	if err != nil {
+		return protocol.Response{}, fmt.Errorf("send HTTP request: %w", err)
+	}
+	defer httpResponse.Body.Close()
+
+	var response protocol.Response
+	if err := json.NewDecoder(httpResponse.Body).Decode(&response); err != nil {
+		return protocol.Response{}, fmt.Errorf("decode HTTP response with status %d: %w", httpResponse.StatusCode, err)
+	}
+	if response.Error != nil {
+		return response, response.Error
+	}
+	if httpResponse.StatusCode != http.StatusOK {
+		return response, fmt.Errorf("unexpected HTTP status %d", httpResponse.StatusCode)
+	}
+	return response, nil
+}
+
+func requestName(request protocol.Request) (string, bool) {
+	if request.Method != "tools/call" && request.Method != "resources/read" && request.Method != "prompts/get" {
+		return "", false
+	}
+	var params struct {
+		Name string `json:"name"`
+		URI  string `json:"uri"`
+	}
+	if err := json.Unmarshal(request.Params, &params); err != nil {
+		return "", false
+	}
+	if request.Method == "resources/read" {
+		return params.URI, params.URI != ""
+	}
+	return params.Name, params.Name != ""
 }
 
 func openAIToolsFromToolDescriptions(tools []ToolDescription) []openAITool {
