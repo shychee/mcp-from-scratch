@@ -7,6 +7,7 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/shychee/mcp-from-scratch/internal/protocol"
 )
 
@@ -18,15 +19,65 @@ const (
 	serverVersion      = "0.1.0"
 )
 
+// Tool is an MCP tool implementation.
 type Tool interface {
-	Definition() tool
-	Call(toolCallInvocation) (toolCallResult, error)
+	Definition() ToolDefinition
+	Call(ToolInvocation) (ToolResult, error)
+}
+
+// ToolDefinition is the public description returned by tools/list.
+type ToolDefinition struct {
+	Name         string         `json:"name"`
+	Description  string         `json:"description"`
+	InputSchema  map[string]any `json:"inputSchema"`
+	OutputSchema map[string]any `json:"outputSchema,omitempty"`
+}
+
+// ToolInvocation is the validated input passed to a tool handler.
+type ToolInvocation struct {
+	Context            context.Context
+	Arguments          json.RawMessage
+	InputResponses     map[string]json.RawMessage
+	RequestState       string
+	ClientCapabilities map[string]any
+}
+
+// ToolResult is the result returned by an MCP tool handler.
+type ToolResult struct {
+	protocol.Result
+	Content           []ContentBlock          `json:"content,omitempty"`
+	StructuredContent any                     `json:"structuredContent,omitempty"`
+	IsError           bool                    `json:"isError,omitempty"`
+	InputRequests     map[string]inputRequest `json:"inputRequests,omitempty"`
+	RequestState      string                  `json:"requestState,omitempty"`
+}
+
+// ContentBlock is a content item returned by a tool.
+type ContentBlock struct {
+	Type string `json:"type"`
+	Text string `json:"text,omitempty"`
+}
+
+// Internal aliases preserve the original in-package API while exposing the
+// same concrete types to consumers.
+type tool = ToolDefinition
+type toolCallInvocation = ToolInvocation
+type toolCallResult = ToolResult
+type contentBlock = ContentBlock
+
+type registeredTool struct {
+	tool         Tool
+	definition   ToolDefinition
+	inputSchema  *jsonschema.Resolved
+	outputSchema *jsonschema.Resolved
 }
 
 type Server struct {
 	mu            sync.RWMutex
-	tools         []Tool
+	tools         map[string]registeredTool
+	catalogs      catalogRegistry
 	subscriptions map[*subscription]struct{}
+	extensions    protocol.Extensions
 }
 
 type discoverResult struct {
@@ -36,7 +87,10 @@ type discoverResult struct {
 }
 
 type capabilities struct {
-	Tools map[string]any `json:"tools"`
+	Tools      map[string]any      `json:"tools"`
+	Resources  map[string]any      `json:"resources,omitempty"`
+	Prompts    map[string]any      `json:"prompts,omitempty"`
+	Extensions protocol.Extensions `json:"extensions,omitempty"`
 }
 
 type unsupportedProtocolVersionData struct {
@@ -46,25 +100,7 @@ type unsupportedProtocolVersionData struct {
 
 type toolsListResult struct {
 	protocol.CacheableResult
-	Tools []tool `json:"tools"`
-}
-
-type tool struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	InputSchema map[string]any `json:"inputSchema"`
-}
-
-type toolCallResult struct {
-	protocol.Result
-	Content       []contentBlock          `json:"content,omitempty"`
-	InputRequests map[string]inputRequest `json:"inputRequests,omitempty"`
-	RequestState  string                  `json:"requestState,omitempty"`
-}
-
-type contentBlock struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Tools []ToolDefinition `json:"tools"`
 }
 
 type toolCallParams struct {
@@ -75,29 +111,75 @@ type toolCallParams struct {
 	RequestState   string                     `json:"requestState,omitempty"`
 }
 
-type toolCallInvocation struct {
-	Arguments          json.RawMessage
-	InputResponses     map[string]json.RawMessage
-	RequestState       string
-	ClientCapabilities map[string]any
-}
-
 type echoArguments struct {
 	Text string `json:"text"`
 }
 
 func New(tools ...Tool) *Server {
+	server, err := NewServer(tools...)
+	if err != nil {
+		panic(err)
+	}
+	return server
+}
+
+// NewServer constructs a server and returns registration errors instead of
+// silently dropping an invalid tool.
+func NewServer(tools ...Tool) (*Server, error) {
 	if len(tools) == 0 {
 		tools = []Tool{newEchoTool("echo"), confirmPreviewTool{}}
 	}
-	return &Server{
-		tools:         append([]Tool(nil), tools...),
+	server := &Server{
+		tools:         make(map[string]registeredTool),
 		subscriptions: make(map[*subscription]struct{}),
 	}
+	for _, tool := range tools {
+		if err := server.RegisterTool(tool); err != nil {
+			return nil, err
+		}
+	}
+	return server, nil
+}
+
+// SetExtensions replaces the server's advertised extension settings.
+func (s *Server) SetExtensions(extensions protocol.Extensions) error {
+	if err := extensions.Validate(); err != nil {
+		return err
+	}
+	cloned := protocol.IntersectExtensions(extensions, extensions)
+	s.mu.Lock()
+	s.extensions = cloned
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *Server) extensionSnapshot() protocol.Extensions {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return protocol.IntersectExtensions(s.extensions, s.extensions)
+}
+
+// RegisterTool validates and atomically adds a tool to the name-indexed
+// registry. Invalid or duplicate tools never become visible to callers.
+func (s *Server) RegisterTool(tool Tool) error {
+	entry, err := prepareTool(tool)
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	if _, exists := s.tools[entry.definition.Name]; exists {
+		s.mu.Unlock()
+		return fmt.Errorf("register tool: duplicate tool %q", entry.definition.Name)
+	}
+	s.tools[entry.definition.Name] = entry
+	s.mu.Unlock()
+	s.publishListChanged(toolListChange)
+	return nil
 }
 
 // Handle dispatches valid JSON-RPC requests to the MCP method implementation.
-func (s *Server) Handle(_ context.Context, request protocol.Request) protocol.Response {
+func (s *Server) Handle(ctx context.Context, request protocol.Request) protocol.Response {
 	response := protocol.Response{
 		JSONRPC: "2.0",
 		ID:      request.ID,
@@ -109,6 +191,7 @@ func (s *Server) Handle(_ context.Context, request protocol.Request) protocol.Re
 
 	switch request.Method {
 	case "server/discover":
+		resources, prompts := s.catalogCapabilities()
 		response.Result = mustMarshal(discoverResult{
 			CacheableResult: protocol.CacheableResult{
 				Result:     newResult(),
@@ -117,28 +200,49 @@ func (s *Server) Handle(_ context.Context, request protocol.Request) protocol.Re
 			},
 			SupportedVersions: []string{protocolVersion},
 			Capabilities: capabilities{
-				Tools: map[string]any{"listChanged": true},
+				Tools:      map[string]any{"listChanged": true},
+				Resources:  resources,
+				Prompts:    prompts,
+				Extensions: s.extensionSnapshot(),
 			},
 		})
 	case "tools/list":
-		registeredTools := s.toolSnapshot()
-		tools := make([]tool, 0, len(registeredTools))
-		for _, t := range registeredTools {
-			tools = append(tools, t.Definition())
+		result, err := s.listTools(request.Params)
+		if err != nil {
+			response.Error = err
+			return response
 		}
-		sort.Slice(tools, func(i, j int) bool {
-			return tools[i].Name < tools[j].Name
-		})
-		response.Result = mustMarshal(toolsListResult{
-			CacheableResult: protocol.CacheableResult{
-				Result:     newResult(),
-				TTLMillis:  toolsListTTLMillis,
-				CacheScope: protocol.CacheScopePublic,
-			},
-			Tools: tools,
-		})
+		response.Result = result
+	case "resources/list":
+		result, err := s.listResources(request.Params)
+		if err != nil {
+			response.Error = err
+			return response
+		}
+		response.Result = result
+	case "resources/read":
+		result, err := s.readResource(request.Params)
+		if err != nil {
+			response.Error = err
+			return response
+		}
+		response.Result = result
+	case "prompts/list":
+		result, err := s.listPrompts(request.Params)
+		if err != nil {
+			response.Error = err
+			return response
+		}
+		response.Result = result
+	case "prompts/get":
+		result, err := s.getPrompt(request.Params)
+		if err != nil {
+			response.Error = err
+			return response
+		}
+		response.Result = result
 	case "tools/call":
-		result, err := s.callTool(request.Params)
+		result, err := s.callTool(ctx, request.Params)
 		if err != nil {
 			if protocolError, ok := err.(*protocol.Error); ok {
 				response.Error = protocolError
@@ -232,7 +336,7 @@ func (echoTool) Call(invocation toolCallInvocation) (toolCallResult, error) {
 	}, nil
 }
 
-func (s *Server) callTool(raw json.RawMessage) (toolCallResult, error) {
+func (s *Server) callTool(ctx context.Context, raw json.RawMessage) (toolCallResult, error) {
 	var params toolCallParams
 	if err := json.Unmarshal(raw, &params); err != nil {
 		return toolCallResult{}, fmt.Errorf("decode tool call params: %w", err)
@@ -241,112 +345,60 @@ func (s *Server) callTool(raw json.RawMessage) (toolCallResult, error) {
 		return toolCallResult{}, fmt.Errorf("missing tool name")
 	}
 
-	for _, registeredTool := range s.toolSnapshot() {
-		definition := registeredTool.Definition()
-		if definition.Name == params.Name {
-			if err := validateToolArguments(definition, params.Arguments); err != nil {
-				return toolCallResult{}, err
-			}
-			return registeredTool.Call(toolCallInvocation{
-				Arguments:          params.Arguments,
-				InputResponses:     params.InputResponses,
-				RequestState:       params.RequestState,
-				ClientCapabilities: params.Meta.ClientCapabilities,
-			})
+	registeredTool, ok := s.tool(params.Name)
+	if !ok {
+		return toolCallResult{}, fmt.Errorf("unknown tool %q", params.Name)
+	}
+	if err := validateToolArguments(registeredTool.inputSchema, params.Arguments); err != nil {
+		return toolCallResult{}, err
+	}
+	result, err := registeredTool.tool.Call(toolCallInvocation{
+		Context:            ctx,
+		Arguments:          params.Arguments,
+		InputResponses:     params.InputResponses,
+		RequestState:       params.RequestState,
+		ClientCapabilities: params.Meta.ClientCapabilities,
+	})
+	if err != nil {
+		return toolCallResult{}, err
+	}
+	if registeredTool.outputSchema != nil {
+		if result.StructuredContent == nil {
+			return toolCallResult{}, protocol.NewErrorWithData(
+				protocol.CodeInternalError,
+				"tool output is missing structured content required by output schema",
+				map[string]any{"tool": params.Name},
+			)
+		}
+		if err := registeredTool.outputSchema.Validate(result.StructuredContent); err != nil {
+			return toolCallResult{}, protocol.NewErrorWithData(
+				protocol.CodeInternalError,
+				"tool output does not match output schema",
+				map[string]any{"tool": params.Name},
+			)
 		}
 	}
-
-	return toolCallResult{}, fmt.Errorf("unknown tool %q", params.Name)
+	return result, nil
 }
 
-func (s *Server) toolSnapshot() []Tool {
+func (s *Server) tool(name string) (registeredTool, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return append([]Tool(nil), s.tools...)
+	tool, ok := s.tools[name]
+	return tool, ok
 }
 
-func validateToolArguments(definition tool, raw json.RawMessage) error {
-	schema := definition.InputSchema
-	if !requiresObjectArguments(schema) {
-		return nil
+func (s *Server) toolSnapshot() []registeredTool {
+	s.mu.RLock()
+	tools := make([]registeredTool, 0, len(s.tools))
+	for _, tool := range s.tools {
+		tools = append(tools, tool)
 	}
-
-	var arguments map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &arguments); err != nil {
-		return fmt.Errorf("tool arguments must be an object")
-	}
-
-	for _, name := range requiredProperties(schema) {
-		if _, ok := arguments[name]; !ok {
-			return fmt.Errorf("missing required argument %q", name)
-		}
-	}
-
-	for name, rawValue := range arguments {
-		expectedType, ok := propertyType(schema, name)
-		if !ok {
-			continue
-		}
-		if expectedType == "string" && !isJSONString(rawValue) {
-			return fmt.Errorf("argument %q must be a string", name)
-		}
-	}
-	return nil
-}
-
-func requiresObjectArguments(schema map[string]any) bool {
-	return schemaType(schema) == "object" || len(requiredProperties(schema)) > 0
-}
-
-func propertyType(schema map[string]any, name string) (string, bool) {
-	rawProperties, ok := schema["properties"].(map[string]any)
-	if !ok {
-		return "", false
-	}
-
-	rawProperty, ok := rawProperties[name].(map[string]any)
-	if !ok {
-		return "", false
-	}
-
-	propertyType, ok := rawProperty["type"].(string)
-	return propertyType, ok
-}
-
-func isJSONString(raw json.RawMessage) bool {
-	var value string
-	return json.Unmarshal(raw, &value) == nil
-}
-
-func schemaType(schema map[string]any) string {
-	schemaType, _ := schema["type"].(string)
-	return schemaType
-}
-
-func requiredProperties(schema map[string]any) []string {
-	rawRequired, ok := schema["required"]
-	if !ok {
-		return nil
-	}
-
-	required, ok := rawRequired.([]string)
-	if ok {
-		return required
-	}
-
-	values, ok := rawRequired.([]any)
-	if !ok {
-		return nil
-	}
-
-	names := make([]string, 0, len(values))
-	for _, value := range values {
-		name, ok := value.(string)
-		if ok {
-			names = append(names, name)
-		}
-	}
-	return names
+	s.mu.RUnlock()
+	sort.Slice(tools, func(i, j int) bool {
+		return tools[i].definition.Name < tools[j].definition.Name
+	})
+	return tools
 }
 
 func mustMarshal(value any) json.RawMessage {

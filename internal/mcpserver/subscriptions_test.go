@@ -50,7 +50,7 @@ func TestSubscriptionDoesNotPublishUnrequestedNotificationTypes(t *testing.T) {
 			"io.modelcontextprotocol/protocolVersion": "2026-07-28",
 			"io.modelcontextprotocol/clientCapabilities": {}
 		},
-		"notifications": {"promptsListChanged": true}
+		"notifications": {"rootsListChanged": true}
 	}`))
 	if err != nil {
 		t.Fatalf("subscribe() error = %v", err)
@@ -60,7 +60,7 @@ func TestSubscriptionDoesNotPublishUnrequestedNotificationTypes(t *testing.T) {
 		Notifications subscriptionFilter `json:"notifications"`
 	}
 	decodeNotificationParams(t, mustMarshal(acknowledged), &params)
-	if params.Notifications.ToolsListChanged || bytes.Contains(mustMarshal(acknowledged), []byte("promptsListChanged")) {
+	if params.Notifications.ToolsListChanged || params.Notifications.ResourcesListChanged || params.Notifications.PromptsListChanged || bytes.Contains(mustMarshal(acknowledged), []byte("rootsListChanged")) {
 		t.Fatalf("agreed notifications = %#v, want empty supported subset", params.Notifications)
 	}
 
@@ -70,6 +70,64 @@ func TestSubscriptionDoesNotPublishUnrequestedNotificationTypes(t *testing.T) {
 	select {
 	case message := <-subscription.events:
 		t.Fatalf("unrequested subscription message = %#v, want none", message)
+	default:
+	}
+}
+
+func TestSubscriptionPublishesOnlyRequestedCatalogChangeTypes(t *testing.T) {
+	server := New()
+	resourceSubscriber, resourceAck, err := server.subscribe(protocol.ID(46), modernRequestParamsWithNotifications(t, map[string]any{
+		"resourcesListChanged": true,
+	}))
+	if err != nil {
+		t.Fatalf("subscribe(resources) error = %v", err)
+	}
+	defer server.unsubscribe(resourceSubscriber)
+	promptSubscriber, promptAck, err := server.subscribe(protocol.ID(47), modernRequestParamsWithNotifications(t, map[string]any{
+		"promptsListChanged": true,
+	}))
+	if err != nil {
+		t.Fatalf("subscribe(prompts) error = %v", err)
+	}
+	defer server.unsubscribe(promptSubscriber)
+
+	var resourceAckParams struct {
+		Notifications subscriptionFilter `json:"notifications"`
+	}
+	decodeNotificationParams(t, mustMarshal(resourceAck), &resourceAckParams)
+	if !resourceAckParams.Notifications.ResourcesListChanged || resourceAckParams.Notifications.ToolsListChanged || resourceAckParams.Notifications.PromptsListChanged {
+		t.Fatalf("resource acknowledgement = %#v, want only resourcesListChanged", resourceAckParams.Notifications)
+	}
+	var promptAckParams struct {
+		Notifications subscriptionFilter `json:"notifications"`
+	}
+	decodeNotificationParams(t, mustMarshal(promptAck), &promptAckParams)
+	if !promptAckParams.Notifications.PromptsListChanged || promptAckParams.Notifications.ToolsListChanged || promptAckParams.Notifications.ResourcesListChanged {
+		t.Fatalf("prompt acknowledgement = %#v, want only promptsListChanged", promptAckParams.Notifications)
+	}
+
+	if err := server.RegisterResource(Resource{URI: "demo://late", Name: "Late", Text: "late"}); err != nil {
+		t.Fatalf("RegisterResource() error = %v", err)
+	}
+	assertSubscriptionNotification(t, mustMarshal(<-resourceSubscriber.events), "notifications/resources/list_changed", 46)
+	select {
+	case message := <-promptSubscriber.events:
+		t.Fatalf("resource change leaked to prompt subscriber: %#v", message)
+	default:
+	}
+
+	if err := server.RegisterPrompt(Prompt{
+		Name: "late",
+		Render: func(map[string]string) ([]PromptMessage, error) {
+			return []PromptMessage{{Role: "user", Content: PromptContent{Type: "text", Text: "late"}}}, nil
+		},
+	}); err != nil {
+		t.Fatalf("RegisterPrompt() error = %v", err)
+	}
+	assertSubscriptionNotification(t, mustMarshal(<-promptSubscriber.events), "notifications/prompts/list_changed", 47)
+	select {
+	case message := <-resourceSubscriber.events:
+		t.Fatalf("prompt change leaked to resource subscriber: %#v", message)
 	default:
 	}
 }
@@ -225,7 +283,7 @@ func TestHTTPSubscriptionGracefulCloseSendsCompleteResult(t *testing.T) {
 	server.CloseSubscriptions()
 	completed := readSSEJSON(t, reader)
 	var rpcResponse struct {
-		ID     *int `json:"id"`
+		ID     *protocol.RequestID `json:"id"`
 		Result struct {
 			ResultType string           `json:"resultType"`
 			Meta       subscriptionMeta `json:"_meta"`
@@ -234,11 +292,11 @@ func TestHTTPSubscriptionGracefulCloseSendsCompleteResult(t *testing.T) {
 	if err := json.Unmarshal(completed, &rpcResponse); err != nil {
 		t.Fatalf("decode complete response: %v", err)
 	}
-	if rpcResponse.ID == nil || *rpcResponse.ID != 44 || rpcResponse.Result.ResultType != protocol.ResultTypeComplete {
+	if rpcResponse.ID == nil || rpcResponse.ID.String() != "44" || rpcResponse.Result.ResultType != protocol.ResultTypeComplete {
 		t.Fatalf("complete response = %#v, want id 44 and complete", rpcResponse)
 	}
-	if rpcResponse.Result.Meta.SubscriptionID != 44 {
-		t.Fatalf("complete subscription ID = %d, want 44", rpcResponse.Result.Meta.SubscriptionID)
+	if rpcResponse.Result.Meta.SubscriptionID.String() != "44" {
+		t.Fatalf("complete subscription ID = %s, want 44", rpcResponse.Result.Meta.SubscriptionID.String())
 	}
 	eventually(t, func() bool { return activeSubscriptionCount(server) == 0 })
 }
@@ -428,8 +486,8 @@ func assertSubscriptionNotification(t *testing.T, raw json.RawMessage, method st
 		Meta subscriptionMeta `json:"_meta"`
 	}
 	decodeNotificationParams(t, raw, &params)
-	if params.Meta.SubscriptionID != id {
-		t.Fatalf("subscription ID = %d, want %d", params.Meta.SubscriptionID, id)
+	if params.Meta.SubscriptionID.String() != protocol.ID(id).String() {
+		t.Fatalf("subscription ID = %s, want %d", params.Meta.SubscriptionID.String(), id)
 	}
 }
 

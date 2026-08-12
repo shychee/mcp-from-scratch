@@ -210,7 +210,7 @@ func TestHTTPRPCClientReadsRequestScopedSSEUntilFinalResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("call() error = %v", err)
 	}
-	if response.ID == nil || *response.ID != 91 || len(response.Result) == 0 {
+	if response.ID == nil || response.ID.String() != "91" || len(response.Result) == 0 {
 		t.Fatalf("response = %#v, want final response ID 91", response)
 	}
 }
@@ -289,6 +289,56 @@ func TestToolDescriptionsBecomeOpenAICompatibleTools(t *testing.T) {
 	if !reflect.DeepEqual(tools[0].Function.Parameters, inputSchema) {
 		t.Fatalf("function parameters = %#v, want %#v", tools[0].Function.Parameters, inputSchema)
 	}
+}
+
+func TestListAllToolsFollowsOpaqueCursors(t *testing.T) {
+	t.Parallel()
+
+	client := &pagedToolsClient{responses: []protocol.Response{
+		{JSONRPC: "2.0", ID: protocol.ID(2), Result: json.RawMessage(`{"resultType":"complete","tools":[{"name":"alpha"}],"nextCursor":"opaque-1"}`)},
+		{JSONRPC: "2.0", ID: protocol.ID(2), Result: json.RawMessage(`{"resultType":"complete","tools":[{"name":"bravo"}]}`)},
+	}}
+	params, err := json.Marshal(protocol.RequestParams{Meta: clientRequestMeta()})
+	if err != nil {
+		t.Fatalf("encode params: %v", err)
+	}
+	tools, firstRequest, _, err := listAllTools(client, params, 2)
+	if err != nil {
+		t.Fatalf("listAllTools() error = %v", err)
+	}
+	if len(tools) != 2 || tools[0].Name != "alpha" || tools[1].Name != "bravo" {
+		t.Fatalf("tools = %#v, want alpha, bravo", tools)
+	}
+	if firstRequest.ID == nil || firstRequest.ID.String() != "2" {
+		t.Fatalf("first request ID = %v, want 2", firstRequest.ID)
+	}
+	if len(client.requests) != 2 {
+		t.Fatalf("request count = %d, want 2", len(client.requests))
+	}
+	var secondParams struct {
+		Cursor string `json:"cursor"`
+	}
+	if err := json.Unmarshal(client.requests[1].Params, &secondParams); err != nil {
+		t.Fatalf("decode second params: %v", err)
+	}
+	if secondParams.Cursor != "opaque-1" {
+		t.Fatalf("second cursor = %q, want opaque-1", secondParams.Cursor)
+	}
+}
+
+type pagedToolsClient struct {
+	requests  []protocol.Request
+	responses []protocol.Response
+}
+
+func (c *pagedToolsClient) call(request protocol.Request) (protocol.Response, error) {
+	c.requests = append(c.requests, request)
+	if len(c.responses) == 0 {
+		return protocol.Response{}, fmt.Errorf("unexpected tools/list request")
+	}
+	response := c.responses[0]
+	c.responses = c.responses[1:]
+	return response, nil
 }
 
 func TestFakeModelDecisionChoosesEchoTool(t *testing.T) {

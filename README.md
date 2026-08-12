@@ -15,8 +15,12 @@ subset of MCP `2026-07-28` over JSON-RPC, stdio, and stateless Streamable HTTP:
 - one stateless MRTR form-elicitation flow with integrity-checked request state
 - one POST-only Streamable HTTP endpoint with modern transport-header checks
 - `subscriptions/listen` for opt-in tool-list change delivery
-- `tools/list`
-- `tools/call`
+- rich `tools/list` / `tools/call` results with JSON Schema 2020-12 validation
+- `resources/list`, `resources/read`, `prompts/list`, and `prompts/get`
+- opaque cursor pagination and list-change delivery for all three catalogs
+- strict dual-era stdio probing with an isolated legacy lifecycle
+- namespaced extension capability negotiation
+- string and integer JSON-RPC request IDs
 - JSON-RPC parse errors, invalid request errors, method-not-found errors, and
   invalid-params errors
 
@@ -35,7 +39,7 @@ demonstrates MRTR by returning an embedded `elicitation/create` input request,
 then completing when the host retries with the exact request state and explicit
 input response. The same dispatcher is available over stateless Streamable HTTP,
 and hosts can refresh their registry after an acknowledged
-`subscriptions/listen` event. OAuth, Tasks, extensions, tracing, and
+`subscriptions/listen` event. OAuth, Tasks, tracing, and
 interoperability work build on that core instead of blocking it.
 
 See [the learning roadmap](docs/learning-roadmap.md) for the ordered migration,
@@ -82,6 +86,9 @@ cmd/mcp-subscription-demo
 
 ```bash
 make demo
+
+# Exercise modern probe, one legacy fallback, initialize, and legacy tools/list.
+make demo-legacy
 
 # Run the same flow over stateless Streamable HTTP.
 make demo-http
@@ -140,7 +147,7 @@ The tests are intentionally split by learning boundary:
 This project currently implements a deliberately small JSON-RPC model:
 
 - request and response envelopes
-- integer request IDs plus explicit `null` response IDs for parse errors
+- string and integer request IDs plus explicit `null` response IDs for parse errors
 - standard JSON-RPC error codes used by this project
 - validation for malformed JSON and invalid request envelopes
 - no-response JSON-RPC notifications
@@ -177,7 +184,8 @@ This project currently implements a deliberately small JSON-RPC model:
 - host-side tool discovery, fake model tool selection, and a transcript of
   host/server exchanges
 
-It does not yet implement full JSON Schema validation or a real model adapter.
+It does not yet implement Tasks, OAuth, progress/cancellation, observability, or
+a real model adapter. Those remain separate roadmap slices.
 
 ## Current Tool
 

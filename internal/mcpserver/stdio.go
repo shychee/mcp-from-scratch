@@ -14,6 +14,10 @@ import (
 // Serve owns stdio framing, JSON parsing, and JSON-RPC envelope validation.
 // Valid requests are passed to Handle for MCP method dispatch.
 func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) error {
+	return s.serveStdio(ctx, input, output, stdioCompatibilityState{})
+}
+
+func (s *Server) serveStdio(ctx context.Context, input io.Reader, output io.Writer, compatibility stdioCompatibilityState) error {
 	scanner := bufio.NewScanner(input)
 	encoder := json.NewEncoder(output)
 	var encoderMu sync.Mutex
@@ -23,9 +27,9 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 		return encoder.Encode(value)
 	}
 
-	activeSubscriptions := make(map[int]*subscription)
+	activeSubscriptions := make(map[protocol.RequestID]*subscription)
 	var activeSubscriptionsMu sync.Mutex
-	removeSubscription := func(id int, expected *subscription) *subscription {
+	removeSubscription := func(id protocol.RequestID, expected *subscription) *subscription {
 		activeSubscriptionsMu.Lock()
 		defer activeSubscriptionsMu.Unlock()
 		subscriber := activeSubscriptions[id]
@@ -42,7 +46,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 		for _, subscriber := range activeSubscriptions {
 			subscribers = append(subscribers, subscriber)
 		}
-		activeSubscriptions = make(map[int]*subscription)
+		activeSubscriptions = make(map[protocol.RequestID]*subscription)
 		activeSubscriptionsMu.Unlock()
 		for _, subscriber := range subscribers {
 			s.unsubscribe(subscriber)
@@ -87,9 +91,19 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			}
 			continue
 		}
+		if response, handled := s.handleStdioCompatibility(ctx, request, &compatibility); handled {
+			// Compatibility lifecycle notifications intentionally have no response.
+			if request.ID == nil {
+				continue
+			}
+			if err := encode(response); err != nil {
+				return fmt.Errorf("encode compatibility response: %w", err)
+			}
+			continue
+		}
 		if request.ID == nil && request.Method == "notifications/cancelled" {
 			var params struct {
-				RequestID *int `json:"requestId"`
+				RequestID *protocol.RequestID `json:"requestId"`
 			}
 			if err := json.Unmarshal(request.Params, &params); err == nil && params.RequestID != nil {
 				if subscriber := removeSubscription(*params.RequestID, nil); subscriber != nil {
@@ -137,7 +151,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 				return fmt.Errorf("encode subscription acknowledgement: %w", err)
 			}
 			subscriptionWriters.Add(1)
-			go func(subscriptionID int, subscriber *subscription) {
+			go func(subscriptionID protocol.RequestID, subscriber *subscription) {
 				defer subscriptionWriters.Done()
 				defer func() {
 					removeSubscription(subscriptionID, subscriber)
@@ -165,6 +179,13 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			continue
 		}
 		response := s.Handle(ctx, request)
+		// A modern probe that is explicitly not implemented is the only server
+		// signal that permits switching this stdio connection into legacy mode.
+		// All other failures remain failures and never trigger downgrade.
+		if compatibility.era == stdioEraModern && request.Method == "server/discover" &&
+			response.Error != nil && response.Error.Code == protocol.CodeMethodNotFound {
+			compatibility.era = stdioEraLegacy
+		}
 		// JSON-RPC notifications have no ID and must not receive responses.
 		if request.ID == nil {
 			continue

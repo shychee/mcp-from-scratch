@@ -52,11 +52,11 @@ request/response path, and only then adds network transport and streaming.
 
 ### Compatibility and correctness
 
-- [#16](https://github.com/shychee/mcp-from-scratch/issues/16) isolates
+- [x] [#16](https://github.com/shychee/mcp-from-scratch/issues/16) isolates
   `2025-06-18` compatibility from the modern implementation. Removed
   initialization and deprecated Roots, Sampling, and Logging behavior belong
   there, not in the modern core.
-- [#17](https://github.com/shychee/mcp-from-scratch/issues/17) upgrades the
+- [x] [#17](https://github.com/shychee/mcp-from-scratch/issues/17) upgrades the
   teaching validator to JSON Schema 2020-12.
 - [#24](https://github.com/shychee/mcp-from-scratch/issues/24) verifies the
   result against independent MCP implementations and publishes a support
@@ -64,7 +64,7 @@ request/response path, and only then adds network transport and streaming.
 
 ### Optional standards-oriented enhancements
 
-- [#18](https://github.com/shychee/mcp-from-scratch/issues/18) provides generic
+- [x] [#18](https://github.com/shychee/mcp-from-scratch/issues/18) provides generic
   extension negotiation, including the capability foundation for MCP Apps.
 - [#19](https://github.com/shychee/mcp-from-scratch/issues/19) implements one
   durable Tasks extension workflow.

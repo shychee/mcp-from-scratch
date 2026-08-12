@@ -2,15 +2,24 @@ package mcpserver
 
 import (
 	"encoding/json"
-	"fmt"
 	"sync"
 
 	"github.com/shychee/mcp-from-scratch/internal/protocol"
 )
 
 type subscriptionFilter struct {
-	ToolsListChanged bool `json:"toolsListChanged,omitempty"`
+	ToolsListChanged     bool `json:"toolsListChanged,omitempty"`
+	ResourcesListChanged bool `json:"resourcesListChanged,omitempty"`
+	PromptsListChanged   bool `json:"promptsListChanged,omitempty"`
 }
+
+type listChangeKind int
+
+const (
+	toolListChange listChangeKind = iota + 1
+	resourceListChange
+	promptListChange
+)
 
 type subscriptionListenParams struct {
 	protocol.RequestParams
@@ -18,11 +27,11 @@ type subscriptionListenParams struct {
 }
 
 type subscriptionMeta struct {
-	SubscriptionID int `json:"io.modelcontextprotocol/subscriptionId"`
+	SubscriptionID protocol.RequestID `json:"io.modelcontextprotocol/subscriptionId"`
 }
 
 type subscription struct {
-	id            int
+	id            protocol.RequestID
 	notifications subscriptionFilter
 	events        chan protocol.Notification
 	complete      chan struct{}
@@ -37,37 +46,10 @@ func (s *Server) RegisterEchoTool(name string) error {
 }
 
 func (s *Server) registerTool(registeredTool Tool) error {
-	if registeredTool == nil {
-		return fmt.Errorf("register tool: nil tool")
-	}
-	definition := registeredTool.Definition()
-	if definition.Name == "" {
-		return fmt.Errorf("register tool: missing tool name")
-	}
-
-	s.mu.Lock()
-	for _, existing := range s.tools {
-		if existing.Definition().Name == definition.Name {
-			s.mu.Unlock()
-			return fmt.Errorf("register tool: duplicate tool %q", definition.Name)
-		}
-	}
-	s.tools = append(s.tools, registeredTool)
-	subscribers := make([]*subscription, 0, len(s.subscriptions))
-	for subscriber := range s.subscriptions {
-		if subscriber.notifications.ToolsListChanged {
-			subscribers = append(subscribers, subscriber)
-		}
-	}
-	s.mu.Unlock()
-
-	for _, subscriber := range subscribers {
-		subscriber.notify(toolsListChangedNotification(subscriber.id))
-	}
-	return nil
+	return s.RegisterTool(registeredTool)
 }
 
-func (s *Server) subscribe(id *int, rawParams json.RawMessage) (*subscription, protocol.Notification, *protocol.Error) {
+func (s *Server) subscribe(id *protocol.RequestID, rawParams json.RawMessage) (*subscription, protocol.Notification, *protocol.Error) {
 	if id == nil {
 		return nil, protocol.Notification{}, protocol.NewError(protocol.CodeInvalidRequest, "subscriptions/listen requires a request ID")
 	}
@@ -80,7 +62,9 @@ func (s *Server) subscribe(id *int, rawParams json.RawMessage) (*subscription, p
 		return nil, protocol.Notification{}, protocol.NewError(protocol.CodeInvalidParams, "missing or invalid notifications filter")
 	}
 	agreed := subscriptionFilter{
-		ToolsListChanged: params.Notifications.ToolsListChanged,
+		ToolsListChanged:     params.Notifications.ToolsListChanged,
+		ResourcesListChanged: params.Notifications.ResourcesListChanged,
+		PromptsListChanged:   params.Notifications.PromptsListChanged,
 	}
 	subscriber := &subscription{
 		id:            *id,
@@ -131,7 +115,35 @@ func (s *subscription) notify(message protocol.Notification) {
 	}
 }
 
-func subscriptionAcknowledgedNotification(id int, notifications subscriptionFilter) protocol.Notification {
+func (s *Server) publishListChanged(kind listChangeKind) {
+	s.mu.RLock()
+	subscribers := make([]*subscription, 0, len(s.subscriptions))
+	for subscriber := range s.subscriptions {
+		if subscriber.notifications.accepts(kind) {
+			subscribers = append(subscribers, subscriber)
+		}
+	}
+	s.mu.RUnlock()
+
+	for _, subscriber := range subscribers {
+		subscriber.notify(listChangedNotification(subscriber.id, kind))
+	}
+}
+
+func (f subscriptionFilter) accepts(kind listChangeKind) bool {
+	switch kind {
+	case toolListChange:
+		return f.ToolsListChanged
+	case resourceListChange:
+		return f.ResourcesListChanged
+	case promptListChange:
+		return f.PromptsListChanged
+	default:
+		return false
+	}
+}
+
+func subscriptionAcknowledgedNotification(id protocol.RequestID, notifications subscriptionFilter) protocol.Notification {
 	return protocol.Notification{
 		JSONRPC: "2.0",
 		Method:  "notifications/subscriptions/acknowledged",
@@ -145,20 +157,33 @@ func subscriptionAcknowledgedNotification(id int, notifications subscriptionFilt
 	}
 }
 
-func toolsListChangedNotification(id int) protocol.Notification {
+func toolsListChangedNotification(id protocol.RequestID) protocol.Notification {
+	return listChangedNotification(id, toolListChange)
+}
+
+func listChangedNotification(id protocol.RequestID, kind listChangeKind) protocol.Notification {
+	method := ""
+	switch kind {
+	case toolListChange:
+		method = "notifications/tools/list_changed"
+	case resourceListChange:
+		method = "notifications/resources/list_changed"
+	case promptListChange:
+		method = "notifications/prompts/list_changed"
+	}
 	return protocol.Notification{
 		JSONRPC: "2.0",
-		Method:  "notifications/tools/list_changed",
+		Method:  method,
 		Params: mustMarshal(struct {
 			Meta subscriptionMeta `json:"_meta"`
 		}{Meta: subscriptionMeta{SubscriptionID: id}}),
 	}
 }
 
-func subscriptionCompleteResponse(id int) protocol.Response {
+func subscriptionCompleteResponse(id protocol.RequestID) protocol.Response {
 	return protocol.Response{
 		JSONRPC: "2.0",
-		ID:      protocol.ID(id),
+		ID:      &id,
 		Result: mustMarshal(struct {
 			ResultType string           `json:"resultType"`
 			Meta       subscriptionMeta `json:"_meta"`
