@@ -23,6 +23,7 @@ stdio 和无状态 Streamable HTTP 上的一个小型子集：
 - namespaced extension capability negotiation
 - string 和 integer JSON-RPC request ID
 - request-scoped progress、协作式 cancellation、trace context 和日志
+- OAuth protected-resource metadata、Bearer 校验、发现、PKCE 和有界 scope upgrade
 - JSON-RPC parse error、invalid request error、method-not-found error 和
   invalid-params error
 
@@ -38,7 +39,8 @@ stdio 和无状态 Streamable HTTP 上的一个小型子集：
 `elicitation/create` input request 演示 MRTR；host 原样带回 request state 和显式
 input response 后，server 才完成调用。同一个 dispatcher 现在也能通过无状态
 Streamable HTTP 使用；host 也可以在收到已确认的 `subscriptions/listen` 事件后刷新
-registry。OAuth、Tasks、trace 和互操作性验证建立在核心协议之上，不阻塞核心迁移。
+registry。Tasks、request observability 和 OAuth resource-server/host 流程已经建立在
+核心协议之上；模型集成和最终官方 peer 互操作验证是最后一组 roadmap 工作。
 
 迁移顺序、兼容边界和官方规范链接见
 [学习路线](docs/learning-roadmap.md)。
@@ -80,6 +82,11 @@ cmd/mcp-subscription-demo
 cmd/mcp-task-demo
   通过 HTTP 创建 durable deferred_echo task
   轮询 tasks/get、通过 tasks/update 审批，并读取 notifications/tasks
+
+cmd/mcp-oauth-demo
+  从本地 resource server 发布 protected-resource metadata
+  发现本地 fake authorization server 并执行 S256 PKCE
+  校验 token audience/scope 后重放一次受保护请求
 ```
 
 ## 运行 Demo
@@ -101,6 +108,9 @@ make demo-subscriptions
 
 # 创建、审批、轮询并观察一个 deferred task。
 make demo-task
+
+# 无凭据运行本地 resource-server、discovery、PKCE 和 replay 流程。
+make demo-oauth
 ```
 
 demo 会打印每一次 request 和 response：
@@ -188,6 +198,11 @@ make test
 - task-id 过滤的 `subscriptions/listen` ACK 子集和完整 `notifications/tasks`
 - 在返回 task handle 前先持久化的 bounded `deferred_echo` workflow
 - 使用密码学随机 task ID；`tasks/list` 和 `tasks/result` 保持 method-not-found
+- RFC 9728 protected-resource metadata 和注入式 Bearer token 校验
+- MCP dispatch 前校验 issuer、audience、expiry、subject 和 method/name scope
+- 401/403 Bearer challenge、只接受 header token，且不向 tool 转发 token
+- host 侧 resource/authorization-server discovery、S256 PKCE、state/issuer 精确校验、
+  Client ID Metadata Documents、有界 DCR fallback、内存 token store 和一次 scope upgrade
 - `tools/list` 和 `tools/call` 由一个小型 server-side registry 驱动
 - 对 missing、unknown、malformed tool call arguments 做防御性校验
 - host-side tool discovery、fake model tool selection，以及 host/server
@@ -195,8 +210,9 @@ make test
 
 Tasks 的 Memory repository 只保证单进程演示所需的生命周期语义，是明确的
 `TaskRepository` 生产边界，不等同于生产持久化。多实例部署必须提供共享存储，
-并从认证 principal 获取 owner，而不是把 `clientInfo.name` 当作真实身份。
-OAuth 和真实模型 adapter 仍属于独立 roadmap slice。
+并从认证 principal 获取 owner，而不是把 `clientInfo.name` 当作真实身份。OAuth host
+同样只使用内存凭据和注入式 browser callback；生产持久化与 authorization server
+实现不在本项目范围。真实模型 adapter 仍属于独立 roadmap slice。
 
 ## 当前 Tool
 

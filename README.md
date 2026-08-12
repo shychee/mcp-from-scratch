@@ -23,6 +23,7 @@ subset of MCP `2026-07-28` over JSON-RPC, stdio, and stateless Streamable HTTP:
 - namespaced extension capability negotiation
 - string and integer JSON-RPC request IDs
 - request-scoped progress, cooperative cancellation, trace context, and logs
+- OAuth protected-resource metadata, bearer validation, discovery, PKCE, and bounded scope upgrade
 - JSON-RPC parse errors, invalid request errors, method-not-found errors, and
   invalid-params errors
 
@@ -41,8 +42,9 @@ demonstrates MRTR by returning an embedded `elicitation/create` input request,
 then completing when the host retries with the exact request state and explicit
 input response. The same dispatcher is available over stateless Streamable HTTP,
 and hosts can refresh their registry after an acknowledged
-`subscriptions/listen` event. OAuth, Tasks, tracing, and interoperability work
-build on that core instead of blocking it.
+`subscriptions/listen` event. Tasks, request observability, and the OAuth
+resource-server/host flow now build on that core; model integration and final
+official-peer interoperability remain the last roadmap slice.
 
 See [the learning roadmap](docs/learning-roadmap.md) for the ordered migration,
 compatibility boundaries, and links to the official specification.
@@ -86,6 +88,11 @@ cmd/mcp-subscription-demo
 cmd/mcp-task-demo
   creates a durable deferred_echo task over HTTP
   polls tasks/get, approves it with tasks/update, and reads notifications/tasks
+
+cmd/mcp-oauth-demo
+  publishes protected-resource metadata from a local resource server
+  discovers a local fake authorization server and performs S256 PKCE
+  validates the issued audience/scopes and replays one protected request
 ```
 
 ## Run It
@@ -107,6 +114,9 @@ make demo-subscriptions
 
 # Create, approve, poll, and observe one deferred task.
 make demo-task
+
+# Run a credential-free local resource-server, discovery, PKCE, and replay flow.
+make demo-oauth
 ```
 
 The demo prints each request and response:
@@ -197,6 +207,12 @@ This project currently implements a deliberately small JSON-RPC model:
 - a bounded `deferred_echo` workflow that persists before returning its task handle
 - cryptographically random task IDs; removed `tasks/list` and `tasks/result` remain
   method-not-found
+- RFC 9728 protected-resource metadata and injected bearer-token validation
+- issuer, audience, expiry, subject, and method/name scope checks before MCP dispatch
+- Bearer challenges for 401/403, header-only tokens, and no token forwarding to tools
+- host-side resource/authorization-server discovery, S256 PKCE, exact state/issuer
+  checks, Client ID Metadata Documents, bounded DCR fallback, in-memory token
+  storage, and one scope upgrade
 - tool descriptions and calls backed by a small server-side registry
 - defensive validation for missing, unknown, and malformed tool call arguments
 - host-side tool discovery, fake model tool selection, and a transcript of
@@ -205,8 +221,10 @@ This project currently implements a deliberately small JSON-RPC model:
 The in-memory Tasks repository is deliberately process-local for this learning
 slice. It is a narrow `TaskRepository` boundary, not production durability;
 multi-instance deployments must provide a shared store and derive owner identity
-from authenticated principals rather than `clientInfo.name`. OAuth and a real
-model adapter remain separate roadmap slices.
+from authenticated principals rather than `clientInfo.name`. The OAuth host
+also deliberately uses in-memory credentials and an injected browser callback;
+production persistence and authorization-server implementation are out of
+scope. A real model adapter remains a separate roadmap slice.
 
 ## Current Tool
 
