@@ -37,7 +37,8 @@ type openAIFunction struct {
 }
 
 type toolsListResult struct {
-	Tools []ToolDescription `json:"tools"`
+	Tools      []ToolDescription `json:"tools"`
+	NextCursor string            `json:"nextCursor,omitempty"`
 }
 
 type toolCallRequestParams struct {
@@ -61,6 +62,7 @@ type Transcript struct {
 	PreviewConfirmation  protocol.Response
 	Exchanges            []Exchange
 	DiscoveredTools      []ToolDescription
+	NegotiatedExtensions protocol.Extensions
 }
 
 type inputRequiredResult struct {
@@ -101,7 +103,18 @@ func RunDemo(ctx context.Context, serverCommand ServerCommand) (Transcript, erro
 		decoder: json.NewDecoder(stdout),
 	}
 
-	transcript, err := runProtocolDemo(&client)
+	var negotiator compatibilityNegotiator
+	compatibility, err := negotiator.detect(&client, []string{protocol.Version20260728}, func() error {
+		return legacyInitializeCall(&client)
+	})
+	var transcript Transcript
+	if err == nil {
+		if compatibility.Era == ServerEraModern {
+			transcript, err = runProtocolDemoFromDiscovery(&client, compatibility.Discovery, compatibility.ProtocolVersion)
+		} else {
+			transcript, err = runLegacyProtocolDemo(&client)
+		}
+	}
 	closeErr := stdin.Close()
 	waitErr := cmd.Wait()
 
@@ -161,32 +174,34 @@ func runProtocolDemo(client protocolClient) (Transcript, error) {
 	if err != nil {
 		return Transcript{}, fmt.Errorf("server/discover: %w", err)
 	}
+	return runProtocolDemoFromDiscovery(client, discovery, protocol.Version20260728)
+}
+
+func runProtocolDemoFromDiscovery(client protocolClient, discovery protocol.Response, version string) (Transcript, error) {
 	if err := decodeCompleteResult(discovery.Result, &struct{}{}); err != nil {
 		return Transcript{}, fmt.Errorf("decode server/discover result: %w", err)
 	}
-
-	toolsListRequest := protocol.Request{
-		JSONRPC: "2.0",
-		ID:      protocol.ID(2),
-		Method:  "tools/list",
-		Params:  requestParamsJSON,
+	requestParamsJSON, err := json.Marshal(protocol.RequestParams{Meta: requestMetaForVersion(version)})
+	if err != nil {
+		return Transcript{}, fmt.Errorf("encode request metadata: %w", err)
 	}
-	toolsList, err := client.call(toolsListRequest)
+	discoveryRequest := protocol.Request{JSONRPC: "2.0", ID: discovery.ID, Method: "server/discover", Params: requestParamsJSON}
+	negotiatedExtensions, err := negotiatedExtensionsFromDiscovery(clientExtensions(), discovery.Result)
+	if err != nil {
+		return Transcript{}, fmt.Errorf("negotiate extensions: %w", err)
+	}
+
+	listedTools, toolsListRequest, toolsList, err := listAllTools(client, requestParamsJSON, 2)
 	if err != nil {
 		return Transcript{}, fmt.Errorf("tools/list: %w", err)
 	}
 
-	var listedTools toolsListResult
-	if err := decodeCompleteResult(toolsList.Result, &listedTools); err != nil {
-		return Transcript{}, fmt.Errorf("decode tools/list result: %w", err)
-	}
-
-	decision, err := fakeModelDecision(listedTools.Tools, "hello from fake model")
+	decision, err := fakeModelDecision(listedTools, "hello from fake model")
 	if err != nil {
 		return Transcript{}, fmt.Errorf("fake model decision: %w", err)
 	}
 	toolCallParams := toolCallRequestParams{
-		RequestParams: protocol.RequestParams{Meta: clientRequestMeta()},
+		RequestParams: protocol.RequestParams{Meta: requestMetaForVersion(version)},
 		Name:          decision.ToolName,
 		Arguments:     decision.Arguments,
 	}
@@ -215,7 +230,7 @@ func runProtocolDemo(client protocolClient) (Transcript, error) {
 		return Transcript{}, fmt.Errorf("encode confirm_preview arguments: %w", err)
 	}
 	previewRequestParams := toolCallRequestParams{
-		RequestParams: protocol.RequestParams{Meta: clientRequestMeta()},
+		RequestParams: protocol.RequestParams{Meta: requestMetaForVersion(version)},
 		Name:          "confirm_preview",
 		Arguments:     previewArguments,
 	}
@@ -280,7 +295,8 @@ func runProtocolDemo(client protocolClient) (Transcript, error) {
 		EchoCall:             echoCall,
 		PreviewInputRequired: previewInputRequired,
 		PreviewConfirmation:  previewConfirmation,
-		DiscoveredTools:      listedTools.Tools,
+		DiscoveredTools:      listedTools,
+		NegotiatedExtensions: negotiatedExtensions,
 		Exchanges: []Exchange{
 			{Name: "server/discover", Request: discoveryRequest, Response: &discovery},
 			{Name: "tools/list", Request: toolsListRequest, Response: &toolsList},
@@ -289,6 +305,73 @@ func runProtocolDemo(client protocolClient) (Transcript, error) {
 			{Name: "confirm_preview retry", Request: previewRetryRequest, Response: &previewConfirmation},
 		},
 	}, nil
+}
+
+func runLegacyProtocolDemo(client protocolClient) (Transcript, error) {
+	params := json.RawMessage(`{}`)
+	request := protocol.Request{JSONRPC: "2.0", ID: protocol.ID(3), Method: "tools/list", Params: params}
+	list, err := client.call(request)
+	if err != nil {
+		return Transcript{}, fmt.Errorf("legacy tools/list: %w", err)
+	}
+	var listed toolsListResult
+	if err := decodeCompleteResult(list.Result, &listed); err != nil {
+		return Transcript{}, fmt.Errorf("decode legacy tools/list: %w", err)
+	}
+	return Transcript{
+		ToolsList:       list,
+		DiscoveredTools: listed.Tools,
+		Exchanges:       []Exchange{{Name: "legacy tools/list", Request: request, Response: &list}},
+	}, nil
+}
+
+func listAllTools(client protocolClient, requestParamsJSON json.RawMessage, firstID int) ([]ToolDescription, protocol.Request, protocol.Response, error) {
+	var (
+		allTools      []ToolDescription
+		cursor        string
+		firstRequest  protocol.Request
+		firstResponse protocol.Response
+	)
+	seenCursors := make(map[string]struct{})
+	params := map[string]any{}
+	if err := json.Unmarshal(requestParamsJSON, &params); err != nil {
+		return nil, protocol.Request{}, protocol.Response{}, fmt.Errorf("decode tools/list params: %w", err)
+	}
+	for page := 0; ; page++ {
+		if cursor != "" {
+			params["cursor"] = cursor
+		}
+		paramsJSON, err := json.Marshal(params)
+		if err != nil {
+			return nil, protocol.Request{}, protocol.Response{}, fmt.Errorf("encode tools/list params: %w", err)
+		}
+		request := protocol.Request{
+			JSONRPC: "2.0",
+			ID:      protocol.ID(firstID + page*1000),
+			Method:  "tools/list",
+			Params:  paramsJSON,
+		}
+		response, err := client.call(request)
+		if err != nil {
+			return nil, protocol.Request{}, protocol.Response{}, err
+		}
+		var listed toolsListResult
+		if err := decodeCompleteResult(response.Result, &listed); err != nil {
+			return nil, protocol.Request{}, protocol.Response{}, fmt.Errorf("decode tools/list result: %w", err)
+		}
+		if page == 0 {
+			firstRequest, firstResponse = request, response
+		}
+		allTools = append(allTools, listed.Tools...)
+		if listed.NextCursor == "" {
+			return allTools, firstRequest, firstResponse, nil
+		}
+		if _, repeated := seenCursors[listed.NextCursor]; repeated {
+			return nil, protocol.Request{}, protocol.Response{}, fmt.Errorf("tools/list repeated nextCursor %q", listed.NextCursor)
+		}
+		seenCursors[listed.NextCursor] = struct{}{}
+		cursor = listed.NextCursor
+	}
 }
 
 func decodeCompleteResult(raw json.RawMessage, target any) error {
@@ -341,23 +424,36 @@ func decodeInputRequiredResult(raw json.RawMessage, target any) error {
 }
 
 func clientRequestMeta() protocol.RequestMeta {
+	capabilities, err := capabilitiesWithExtensions(map[string]any{
+		"elicitation": map[string]any{
+			"form": map[string]any{},
+		},
+	}, clientExtensions())
+	if err != nil {
+		panic(err)
+	}
 	return protocol.RequestMeta{
 		ProtocolVersion: protocol.Version20260728,
 		ClientInfo: &protocol.Implementation{
 			Name:    "mcp-from-scratch-host",
 			Version: "0.1.0",
 		},
-		ClientCapabilities: map[string]any{
-			"elicitation": map[string]any{
-				"form": map[string]any{},
-			},
-		},
+		ClientCapabilities: capabilities,
+	}
+}
+
+func clientExtensions() protocol.Extensions {
+	return protocol.Extensions{
+		"io.modelcontextprotocol/tasks": json.RawMessage(`{}`),
 	}
 }
 
 func (c *rpcClient) call(request protocol.Request) (protocol.Response, error) {
 	if err := c.encoder.Encode(request); err != nil {
 		return protocol.Response{}, fmt.Errorf("encode request: %w", err)
+	}
+	if request.ID == nil {
+		return protocol.Response{}, nil
 	}
 
 	var response protocol.Response
@@ -409,15 +505,15 @@ func (c *httpRPCClient) call(rpcRequest protocol.Request) (protocol.Response, er
 	return response, nil
 }
 
-func decodeHTTPSSEResponse(reader *bufio.Reader, requestID *int) (protocol.Response, error) {
+func decodeHTTPSSEResponse(reader *bufio.Reader, requestID *protocol.RequestID) (protocol.Response, error) {
 	for {
 		raw, err := readSSEData(reader)
 		if err != nil {
 			return protocol.Response{}, err
 		}
 		var envelope struct {
-			ID     *int   `json:"id"`
-			Method string `json:"method"`
+			ID     *protocol.RequestID `json:"id"`
+			Method string              `json:"method"`
 		}
 		if err := json.Unmarshal(raw, &envelope); err != nil {
 			return protocol.Response{}, fmt.Errorf("decode SSE JSON-RPC message: %w", err)

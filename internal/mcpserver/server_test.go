@@ -92,6 +92,36 @@ func TestServer_DiscoverReturnsSupportedVersionAndServerInfo(t *testing.T) {
 	}
 }
 
+func TestServer_DiscoverAdvertisesConfiguredExtensions(t *testing.T) {
+	t.Parallel()
+
+	server := New()
+	if err := server.SetExtensions(protocol.Extensions{
+		"io.modelcontextprotocol/tasks": json.RawMessage(`{"ttlMs":1000}`),
+	}); err != nil {
+		t.Fatalf("SetExtensions() error = %v", err)
+	}
+	response := server.Handle(context.Background(), protocol.Request{
+		JSONRPC: "2.0",
+		ID:      protocol.ID(1),
+		Method:  "server/discover",
+		Params:  modernRequestParams(t, `{}`),
+	})
+	if response.Error != nil {
+		t.Fatalf("Handle(server/discover) error = %v", response.Error)
+	}
+
+	var result struct {
+		Capabilities struct {
+			Extensions protocol.Extensions `json:"extensions"`
+		} `json:"capabilities"`
+	}
+	mustUnmarshalResult(t, response.Result, &result)
+	if got := string(result.Capabilities.Extensions["io.modelcontextprotocol/tasks"]); got != `{"ttlMs":1000}` {
+		t.Fatalf("tasks settings = %s", got)
+	}
+}
+
 func TestServer_RejectsIncompleteRequestMetadata(t *testing.T) {
 	t.Parallel()
 

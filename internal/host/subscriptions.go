@@ -110,16 +110,27 @@ func (s *HTTPToolsSubscription) RefreshOnNextToolsListChanged(requestID int) (pr
 	if err != nil {
 		return protocol.Notification{}, protocol.Response{}, fmt.Errorf("encode tools/list params: %w", err)
 	}
-	refreshed, err := s.client.call(protocol.Request{
-		JSONRPC: "2.0",
-		ID:      protocol.ID(requestID),
-		Method:  "tools/list",
-		Params:  params,
-	})
+	tools, request, refreshed, err := listAllTools(s.client, params, requestID)
 	if err != nil {
 		return protocol.Notification{}, protocol.Response{}, fmt.Errorf("refresh tools/list: %w", err)
 	}
+	var result map[string]json.RawMessage
+	if err := json.Unmarshal(refreshed.Result, &result); err != nil {
+		return protocol.Notification{}, protocol.Response{}, fmt.Errorf("decode refreshed tools/list: %w", err)
+	}
+	result["tools"] = mustMarshalHost(tools)
+	delete(result, "nextCursor")
+	refreshed.Result = mustMarshalHost(result)
+	refreshed.ID = request.ID
 	return changed, refreshed, nil
+}
+
+func mustMarshalHost(value any) json.RawMessage {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		panic(err)
+	}
+	return encoded
 }
 
 func (s *HTTPToolsSubscription) Close() error {
@@ -162,7 +173,7 @@ func validateSubscriptionNotification(notification protocol.Notification, method
 	}
 	var params struct {
 		Meta struct {
-			SubscriptionID int `json:"io.modelcontextprotocol/subscriptionId"`
+			SubscriptionID protocol.RequestID `json:"io.modelcontextprotocol/subscriptionId"`
 		} `json:"_meta"`
 		Notifications struct {
 			ToolsListChanged bool `json:"toolsListChanged"`
@@ -171,8 +182,8 @@ func validateSubscriptionNotification(notification protocol.Notification, method
 	if err := json.Unmarshal(notification.Params, &params); err != nil {
 		return fmt.Errorf("decode subscription notification params: %w", err)
 	}
-	if params.Meta.SubscriptionID != id {
-		return fmt.Errorf("subscription notification ID = %d, want %d", params.Meta.SubscriptionID, id)
+	if params.Meta.SubscriptionID.String() != protocol.ID(id).String() {
+		return fmt.Errorf("subscription notification ID = %s, want %d", params.Meta.SubscriptionID.String(), id)
 	}
 	if requireToolsFilter && !params.Notifications.ToolsListChanged {
 		return fmt.Errorf("subscription acknowledgement omitted toolsListChanged")

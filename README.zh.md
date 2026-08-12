@@ -15,8 +15,12 @@ stdio 和无状态 Streamable HTTP 上的一个小型子集：
 - 一个无状态 MRTR form elicitation 流程，并校验 request state 完整性
 - 一个只接受 POST 的 Streamable HTTP endpoint，并校验现代传输头
 - 通过 `subscriptions/listen` 按需投递 tool list 变更
-- `tools/list`
-- `tools/call`
+- richer tool result 和 JSON Schema 2020-12 输入/输出校验
+- `resources/list`、`resources/read`、`prompts/list`、`prompts/get`
+- 三类 catalog 的 opaque cursor 分页和 list-change 事件
+- 严格的双时代 stdio 探测，以及隔离的 legacy lifecycle
+- namespaced extension capability negotiation
+- string 和 integer JSON-RPC request ID
 - JSON-RPC parse error、invalid request error、method-not-found error 和
   invalid-params error
 
@@ -32,7 +36,7 @@ stdio 和无状态 Streamable HTTP 上的一个小型子集：
 `elicitation/create` input request 演示 MRTR；host 原样带回 request state 和显式
 input response 后，server 才完成调用。同一个 dispatcher 现在也能通过无状态
 Streamable HTTP 使用；host 也可以在收到已确认的 `subscriptions/listen` 事件后刷新
-registry。OAuth、Tasks、扩展、trace 和互操作性验证建立在核心协议
+registry。OAuth、Tasks、trace 和互操作性验证建立在核心协议
 之上，不阻塞核心迁移。
 
 迁移顺序、兼容边界和官方规范链接见
@@ -77,6 +81,9 @@ cmd/mcp-subscription-demo
 
 ```bash
 make demo
+
+# 演示 modern probe、单次 legacy fallback、initialize 和 legacy tools/list。
+make demo-legacy
 
 # 通过无状态 Streamable HTTP 运行相同流程。
 make demo-http
@@ -135,7 +142,7 @@ make test
 当前实现的是一个刻意缩小的 JSON-RPC 模型：
 
 - request 和 response envelope
-- integer request ID，以及 parse error response 里的显式 `null` ID
+- string 和 integer request ID，以及 parse error response 里的显式 `null` ID
 - 项目目前用到的 JSON-RPC 标准错误码
 - malformed JSON 和 invalid request envelope 校验
 - 不需要 response 的 JSON-RPC notification
@@ -170,7 +177,8 @@ make test
 - host-side tool discovery、fake model tool selection，以及 host/server
   exchange transcript
 
-还没有实现完整 JSON Schema 校验，也没有接入真实模型 adapter。
+还没有实现 Tasks、OAuth、progress/cancellation、observability 和真实模型
+adapter；它们属于后续独立 roadmap slice。
 
 ## 当前 Tool
 
