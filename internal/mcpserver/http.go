@@ -1,6 +1,7 @@
 package mcpserver
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"mime"
@@ -73,6 +74,10 @@ func (s *Server) serveHTTP(writer http.ResponseWriter, request *http.Request) {
 		s.serveHTTPSubscription(writer, request, rpcRequest)
 		return
 	}
+	if rpcRequest.ID != nil && (requestHasProgressToken(rpcRequest.Params) || requestHasLogLevel(rpcRequest.Params)) {
+		s.serveHTTPRequestScoped(writer, request, rpcRequest)
+		return
+	}
 
 	response := s.Handle(request.Context(), rpcRequest)
 	if rpcRequest.ID == nil {
@@ -92,6 +97,75 @@ func (s *Server) serveHTTP(writer http.ResponseWriter, request *http.Request) {
 		}
 	}
 	writeHTTPRPCResponse(writer, status, response)
+}
+
+func requestHasProgressToken(raw json.RawMessage) bool {
+	var params struct {
+		Meta struct {
+			ProgressToken json.RawMessage `json:"progressToken"`
+		} `json:"_meta"`
+	}
+	return json.Unmarshal(raw, &params) == nil && validProgressToken(params.Meta.ProgressToken)
+}
+
+func (s *Server) serveHTTPRequestScoped(writer http.ResponseWriter, request *http.Request, rpcRequest protocol.Request) {
+	flusher, ok := writer.(http.Flusher)
+	if !ok {
+		writer.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	events := make(chan protocol.Notification, 16)
+	result := make(chan protocol.Response, 1)
+	requestContext, cancel := context.WithCancel(request.Context())
+	defer cancel()
+	runtimeContext := withRequestRuntime(requestContext, rpcRequest.Params, func(notification protocol.Notification) bool {
+		select {
+		case events <- notification:
+			return true
+		case <-requestContext.Done():
+			return false
+		}
+	})
+	go func() {
+		response := s.Handle(runtimeContext, rpcRequest)
+		finishRequestRuntime(runtimeContext)
+		result <- response
+	}()
+
+	writer.Header().Set("Content-Type", protocol.MediaTypeSSE)
+	writer.Header().Set("Cache-Control", "no-cache")
+	writer.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	for {
+		select {
+		case <-requestContext.Done():
+			return
+		case notification := <-events:
+			if err := writeSSEMessage(writer, notification); err != nil {
+				return
+			}
+			flusher.Flush()
+		case response := <-result:
+			// The runtime is marked complete before the result is published, so
+			// progress after the final response cannot enter the event channel.
+			for {
+				select {
+				case notification := <-events:
+					if err := writeSSEMessage(writer, notification); err != nil {
+						return
+					}
+					flusher.Flush()
+				default:
+					if err := writeSSEMessage(writer, response); err != nil {
+						return
+					}
+					flusher.Flush()
+					return
+				}
+			}
+		}
+	}
 }
 
 func writeHTTPParseError(writer http.ResponseWriter) {

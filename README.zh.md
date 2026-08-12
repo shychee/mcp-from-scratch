@@ -21,6 +21,7 @@ stdio 和无状态 Streamable HTTP 上的一个小型子集：
 - 严格的双时代 stdio 探测，以及隔离的 legacy lifecycle
 - namespaced extension capability negotiation
 - string 和 integer JSON-RPC request ID
+- request-scoped progress、协作式 cancellation、trace context 和日志
 - JSON-RPC parse error、invalid request error、method-not-found error 和
   invalid-params error
 
@@ -87,6 +88,9 @@ make demo-legacy
 
 # 通过无状态 Streamable HTTP 运行相同流程。
 make demo-http
+
+# 展示 request-scoped SSE progress，随后返回最终工具结果。
+make demo-progress
 
 # 展示 acknowledgement、registry 变更和 host 刷新。
 make demo-subscriptions
@@ -177,8 +181,7 @@ make test
 - host-side tool discovery、fake model tool selection，以及 host/server
   exchange transcript
 
-还没有实现 Tasks、OAuth、progress/cancellation、observability 和真实模型
-adapter；它们属于后续独立 roadmap slice。
+还没有实现 Tasks、OAuth 和真实模型 adapter；它们属于后续独立 roadmap slice。
 
 ## 当前 Tool
 

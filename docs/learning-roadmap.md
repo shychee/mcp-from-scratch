@@ -73,9 +73,9 @@ request/response path, and only then adds network transport and streaming.
   server to this repository.
 - [#21](https://github.com/shychee/mcp-from-scratch/issues/21) adds OAuth
   discovery and PKCE to the HTTP host.
-- [#22](https://github.com/shychee/mcp-from-scratch/issues/22) adds progress and
+- [x] [#22](https://github.com/shychee/mcp-from-scratch/issues/22) adds progress and
   cancellation.
-- [#23](https://github.com/shychee/mcp-from-scratch/issues/23) propagates trace
+- [x] [#23](https://github.com/shychee/mcp-from-scratch/issues/23) propagates trace
   context and adds request-scoped logging.
 
 Resources and prompts remain planned protocol surfaces. Their list methods must

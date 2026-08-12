@@ -21,6 +21,7 @@ subset of MCP `2026-07-28` over JSON-RPC, stdio, and stateless Streamable HTTP:
 - strict dual-era stdio probing with an isolated legacy lifecycle
 - namespaced extension capability negotiation
 - string and integer JSON-RPC request IDs
+- request-scoped progress, cooperative cancellation, trace context, and logs
 - JSON-RPC parse errors, invalid request errors, method-not-found errors, and
   invalid-params errors
 
@@ -92,6 +93,9 @@ make demo-legacy
 
 # Run the same flow over stateless Streamable HTTP.
 make demo-http
+
+# Show request-scoped SSE progress followed by the final tool result.
+make demo-progress
 
 # Show acknowledgement, registry change, and host refresh.
 make demo-subscriptions
@@ -184,8 +188,8 @@ This project currently implements a deliberately small JSON-RPC model:
 - host-side tool discovery, fake model tool selection, and a transcript of
   host/server exchanges
 
-It does not yet implement Tasks, OAuth, progress/cancellation, observability, or
-a real model adapter. Those remain separate roadmap slices.
+It does not yet implement Tasks, OAuth, or a real model adapter. Those remain
+separate roadmap slices.
 
 ## Current Tool
 

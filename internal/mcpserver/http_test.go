@@ -53,6 +53,86 @@ func TestHTTPHandlerDispatchesStatelessRequests(t *testing.T) {
 	}
 }
 
+func TestHTTPHandlerStreamsProgressAndFinalResponse(t *testing.T) {
+	server := New(progressTool{})
+	request := modernHTTPRequest(t, 1, "tools/call", `{"name":"progress","arguments":{}}`)
+	request.Header.Set(protocol.HeaderName, "progress")
+	var body map[string]any
+	bodyReader := requestBody(t, 1, "tools/call", `{"name":"progress","arguments":{}}`, protocol.Version20260728)
+	bodyBytes, err := io.ReadAll(bodyReader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(bodyBytes, &body); err != nil {
+		t.Fatal(err)
+	}
+	params := body["params"].(map[string]any)
+	meta := params["_meta"].(map[string]any)
+	meta["progressToken"] = "job"
+	updated, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Body = io.NopCloser(bytes.NewReader(updated))
+	response := httptest.NewRecorder()
+	server.HTTPHandler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Header().Get("Content-Type") != protocol.MediaTypeSSE {
+		t.Fatalf("status/content type = %d/%q", response.Code, response.Header().Get("Content-Type"))
+	}
+	lines := strings.Split(strings.TrimSpace(response.Body.String()), "\n\n")
+	if len(lines) != 4 {
+		t.Fatalf("SSE event count = %d, body = %s", len(lines), response.Body.String())
+	}
+	for i := 0; i < 3; i++ {
+		if !strings.Contains(lines[i], `"method":"notifications/progress"`) {
+			t.Fatalf("event %d = %s", i, lines[i])
+		}
+	}
+	if !strings.Contains(lines[3], `"result"`) {
+		t.Fatalf("final event = %s", lines[3])
+	}
+}
+
+func TestHTTPHandlerStreamsRequestLogsBeforeFinalResponse(t *testing.T) {
+	server := New(&observabilityTool{})
+	request := modernHTTPRequest(t, 1, "tools/call", `{"name":"observe","arguments":{}}`)
+	request.Header.Set(protocol.HeaderName, "observe")
+
+	var body map[string]any
+	bodyBytes, err := io.ReadAll(request.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(bodyBytes, &body); err != nil {
+		t.Fatal(err)
+	}
+	params := body["params"].(map[string]any)
+	meta := params["_meta"].(map[string]any)
+	meta["io.modelcontextprotocol/logLevel"] = "warning"
+	updated, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Body = io.NopCloser(bytes.NewReader(updated))
+
+	response := httptest.NewRecorder()
+	server.HTTPHandler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Header().Get("Content-Type") != protocol.MediaTypeSSE {
+		t.Fatalf("status/content type = %d/%q", response.Code, response.Header().Get("Content-Type"))
+	}
+	events := strings.Split(strings.TrimSpace(response.Body.String()), "\n\n")
+	if len(events) != 2 {
+		t.Fatalf("SSE event count = %d, body = %s", len(events), response.Body.String())
+	}
+	if !strings.Contains(events[0], `"method":"notifications/message"`) ||
+		strings.Contains(events[0], "must-not-leak") || !strings.Contains(events[0], redactedValue) {
+		t.Fatalf("log event = %s", events[0])
+	}
+	if !strings.Contains(events[1], `"result"`) {
+		t.Fatalf("final event = %s", events[1])
+	}
+}
+
 func TestHTTPHandlerRejectsMissingOrMismatchedHeaders(t *testing.T) {
 	t.Parallel()
 
