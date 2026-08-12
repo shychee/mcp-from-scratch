@@ -1,6 +1,7 @@
 package mcpserver
 
 import (
+	"context"
 	"encoding/json"
 	"sync"
 
@@ -8,9 +9,10 @@ import (
 )
 
 type subscriptionFilter struct {
-	ToolsListChanged     bool `json:"toolsListChanged,omitempty"`
-	ResourcesListChanged bool `json:"resourcesListChanged,omitempty"`
-	PromptsListChanged   bool `json:"promptsListChanged,omitempty"`
+	ToolsListChanged     bool     `json:"toolsListChanged,omitempty"`
+	ResourcesListChanged bool     `json:"resourcesListChanged,omitempty"`
+	PromptsListChanged   bool     `json:"promptsListChanged,omitempty"`
+	TaskIDs              []string `json:"taskIds,omitempty"`
 }
 
 type listChangeKind int
@@ -33,6 +35,7 @@ type subscriptionMeta struct {
 type subscription struct {
 	id            protocol.RequestID
 	notifications subscriptionFilter
+	owner         string
 	events        chan protocol.Notification
 	complete      chan struct{}
 	done          chan struct{}
@@ -49,7 +52,7 @@ func (s *Server) registerTool(registeredTool Tool) error {
 	return s.RegisterTool(registeredTool)
 }
 
-func (s *Server) subscribe(id *protocol.RequestID, rawParams json.RawMessage) (*subscription, protocol.Notification, *protocol.Error) {
+func (s *Server) subscribe(ctx context.Context, id *protocol.RequestID, rawParams json.RawMessage) (*subscription, protocol.Notification, *protocol.Error) {
 	if id == nil {
 		return nil, protocol.Notification{}, protocol.NewError(protocol.CodeInvalidRequest, "subscriptions/listen requires a request ID")
 	}
@@ -66,9 +69,21 @@ func (s *Server) subscribe(id *protocol.RequestID, rawParams json.RawMessage) (*
 		ResourcesListChanged: params.Notifications.ResourcesListChanged,
 		PromptsListChanged:   params.Notifications.PromptsListChanged,
 	}
+	if len(params.Notifications.TaskIDs) > 0 {
+		if err := s.taskCapabilityError(params.Meta); err != nil {
+			return nil, protocol.Notification{}, err
+		}
+		owner := taskOwner(ctx, params.Meta)
+		for _, taskID := range params.Notifications.TaskIDs {
+			if _, err := s.taskRepository().Get(ctx, taskID, owner); err == nil {
+				agreed.TaskIDs = append(agreed.TaskIDs, taskID)
+			}
+		}
+	}
 	subscriber := &subscription{
 		id:            *id,
 		notifications: agreed,
+		owner:         taskOwner(ctx, params.Meta),
 		events:        make(chan protocol.Notification, 1),
 		complete:      make(chan struct{}),
 		done:          make(chan struct{}),
@@ -130,6 +145,26 @@ func (s *Server) publishListChanged(kind listChangeKind) {
 	}
 }
 
+func (s *Server) publishTaskChanged(owner string, task protocol.DetailedTask) {
+	s.mu.RLock()
+	subscribers := make([]*subscription, 0, len(s.subscriptions))
+	for subscriber := range s.subscriptions {
+		if subscriber.owner == "" || subscriber.owner != owner {
+			continue
+		}
+		for _, taskID := range subscriber.notifications.TaskIDs {
+			if taskID == task.TaskID {
+				subscribers = append(subscribers, subscriber)
+				break
+			}
+		}
+	}
+	s.mu.RUnlock()
+	for _, subscriber := range subscribers {
+		subscriber.notify(taskChangedNotification(subscriber.id, task))
+	}
+}
+
 func (f subscriptionFilter) accepts(kind listChangeKind) bool {
 	switch kind {
 	case toolListChange:
@@ -154,6 +189,16 @@ func subscriptionAcknowledgedNotification(id protocol.RequestID, notifications s
 			Meta:          subscriptionMeta{SubscriptionID: id},
 			Notifications: notifications,
 		}),
+	}
+}
+
+func taskChangedNotification(id protocol.RequestID, task protocol.DetailedTask) protocol.Notification {
+	params := protocol.TaskNotificationParams{DetailedTask: task}
+	params.Meta.SubscriptionID = id
+	return protocol.Notification{
+		JSONRPC: "2.0",
+		Method:  "notifications/tasks",
+		Params:  mustMarshal(params),
 	}
 }
 

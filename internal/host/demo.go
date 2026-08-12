@@ -556,14 +556,18 @@ func requestName(request protocol.Request) (string, bool) {
 		return "", false
 	}
 	var params struct {
-		Name string `json:"name"`
-		URI  string `json:"uri"`
+		Name   string `json:"name"`
+		URI    string `json:"uri"`
+		TaskID string `json:"taskId"`
 	}
 	if err := json.Unmarshal(request.Params, &params); err != nil {
 		return "", false
 	}
 	if request.Method == "resources/read" {
 		return params.URI, params.URI != ""
+	}
+	if request.Method == "tasks/get" || request.Method == "tasks/update" || request.Method == "tasks/cancel" {
+		return params.TaskID, params.TaskID != ""
 	}
 	return params.Name, params.Name != ""
 }

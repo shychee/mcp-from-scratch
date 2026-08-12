@@ -15,6 +15,7 @@ stdio 和无状态 Streamable HTTP 上的一个小型子集：
 - 一个无状态 MRTR form elicitation 流程，并校验 request state 完整性
 - 一个只接受 POST 的 Streamable HTTP endpoint，并校验现代传输头
 - 通过 `subscriptions/listen` 按需投递 tool list 变更
+- 协商后的 `io.modelcontextprotocol/tasks`，包含 `deferred_echo`、轮询、更新和任务通知
 - richer tool result 和 JSON Schema 2020-12 输入/输出校验
 - `resources/list`、`resources/read`、`prompts/list`、`prompts/get`
 - 三类 catalog 的 opaque cursor 分页和 list-change 事件
@@ -37,8 +38,7 @@ stdio 和无状态 Streamable HTTP 上的一个小型子集：
 `elicitation/create` input request 演示 MRTR；host 原样带回 request state 和显式
 input response 后，server 才完成调用。同一个 dispatcher 现在也能通过无状态
 Streamable HTTP 使用；host 也可以在收到已确认的 `subscriptions/listen` 事件后刷新
-registry。OAuth、Tasks、trace 和互操作性验证建立在核心协议
-之上，不阻塞核心迁移。
+registry。OAuth、Tasks、trace 和互操作性验证建立在核心协议之上，不阻塞核心迁移。
 
 迁移顺序、兼容边界和官方规范链接见
 [学习路线](docs/learning-roadmap.md)。
@@ -76,6 +76,10 @@ cmd/mcp-subscription-demo
   验证第一条消息是带 tag 的 acknowledgement
   注册 late_echo 并接收一条带 tag 的 tools/list_changed notification
   由 host 刷新 tools/list
+
+cmd/mcp-task-demo
+  通过 HTTP 创建 durable deferred_echo task
+  轮询 tasks/get、通过 tasks/update 审批，并读取 notifications/tasks
 ```
 
 ## 运行 Demo
@@ -94,6 +98,9 @@ make demo-progress
 
 # 展示 acknowledgement、registry 变更和 host 刷新。
 make demo-subscriptions
+
+# 创建、审批、轮询并观察一个 deferred task。
+make demo-task
 ```
 
 demo 会打印每一次 request 和 response：
@@ -176,12 +183,20 @@ make test
 - HTTP disconnect 和 stdio `notifications/cancelled` 都会清理订阅；server 也可在关闭
   stream 前发送 graceful complete response
 - host 收到带 tag 的 `notifications/tools/list_changed` 后刷新 `tools/list`
+- 仅在双方协商 `io.modelcontextprotocol/tasks` 后创建 `resultType: task`
+- `tasks/get`、`tasks/update`、`tasks/cancel` 的 owner 和 TTL 校验
+- task-id 过滤的 `subscriptions/listen` ACK 子集和完整 `notifications/tasks`
+- 在返回 task handle 前先持久化的 bounded `deferred_echo` workflow
+- 使用密码学随机 task ID；`tasks/list` 和 `tasks/result` 保持 method-not-found
 - `tools/list` 和 `tools/call` 由一个小型 server-side registry 驱动
 - 对 missing、unknown、malformed tool call arguments 做防御性校验
 - host-side tool discovery、fake model tool selection，以及 host/server
   exchange transcript
 
-还没有实现 Tasks、OAuth 和真实模型 adapter；它们属于后续独立 roadmap slice。
+Tasks 的 Memory repository 只保证单进程演示所需的生命周期语义，是明确的
+`TaskRepository` 生产边界，不等同于生产持久化。多实例部署必须提供共享存储，
+并从认证 principal 获取 owner，而不是把 `clientInfo.name` 当作真实身份。
+OAuth 和真实模型 adapter 仍属于独立 roadmap slice。
 
 ## 当前 Tool
 

@@ -15,6 +15,7 @@ subset of MCP `2026-07-28` over JSON-RPC, stdio, and stateless Streamable HTTP:
 - one stateless MRTR form-elicitation flow with integrity-checked request state
 - one POST-only Streamable HTTP endpoint with modern transport-header checks
 - `subscriptions/listen` for opt-in tool-list change delivery
+- negotiated `io.modelcontextprotocol/tasks` with `deferred_echo`, polling, updates, and task notifications
 - rich `tools/list` / `tools/call` results with JSON Schema 2020-12 validation
 - `resources/list`, `resources/read`, `prompts/list`, and `prompts/get`
 - opaque cursor pagination and list-change delivery for all three catalogs
@@ -40,8 +41,8 @@ demonstrates MRTR by returning an embedded `elicitation/create` input request,
 then completing when the host retries with the exact request state and explicit
 input response. The same dispatcher is available over stateless Streamable HTTP,
 and hosts can refresh their registry after an acknowledged
-`subscriptions/listen` event. OAuth, Tasks, tracing, and
-interoperability work build on that core instead of blocking it.
+`subscriptions/listen` event. OAuth, Tasks, tracing, and interoperability work
+build on that core instead of blocking it.
 
 See [the learning roadmap](docs/learning-roadmap.md) for the ordered migration,
 compatibility boundaries, and links to the official specification.
@@ -81,6 +82,10 @@ cmd/mcp-subscription-demo
   verifies the first message is the tagged acknowledgement
   registers late_echo and receives one tagged tools/list_changed notification
   refreshes tools/list on the host
+
+cmd/mcp-task-demo
+  creates a durable deferred_echo task over HTTP
+  polls tasks/get, approves it with tasks/update, and reads notifications/tasks
 ```
 
 ## Run It
@@ -99,6 +104,9 @@ make demo-progress
 
 # Show acknowledgement, registry change, and host refresh.
 make demo-subscriptions
+
+# Create, approve, poll, and observe one deferred task.
+make demo-task
 ```
 
 The demo prints each request and response:
@@ -183,13 +191,22 @@ This project currently implements a deliberately small JSON-RPC model:
 - HTTP disconnect and stdio `notifications/cancelled` cleanup, plus graceful
   server completion before stream close
 - host refresh of `tools/list` after a tagged `notifications/tools/list_changed`
+- Tasks capability negotiation with `resultType: task` creation results
+- `tasks/get`, `tasks/update`, and `tasks/cancel` with owner and TTL checks
+- task-filtered `subscriptions/listen` ACK subsets and full `notifications/tasks`
+- a bounded `deferred_echo` workflow that persists before returning its task handle
+- cryptographically random task IDs; removed `tasks/list` and `tasks/result` remain
+  method-not-found
 - tool descriptions and calls backed by a small server-side registry
 - defensive validation for missing, unknown, and malformed tool call arguments
 - host-side tool discovery, fake model tool selection, and a transcript of
   host/server exchanges
 
-It does not yet implement Tasks, OAuth, or a real model adapter. Those remain
-separate roadmap slices.
+The in-memory Tasks repository is deliberately process-local for this learning
+slice. It is a narrow `TaskRepository` boundary, not production durability;
+multi-instance deployments must provide a shared store and derive owner identity
+from authenticated principals rather than `clientInfo.name`. OAuth and a real
+model adapter remain separate roadmap slices.
 
 ## Current Tool
 

@@ -78,6 +78,7 @@ type Server struct {
 	catalogs      catalogRegistry
 	subscriptions map[*subscription]struct{}
 	extensions    protocol.Extensions
+	tasks         TaskRepository
 }
 
 type discoverResult struct {
@@ -133,6 +134,7 @@ func NewServer(tools ...Tool) (*Server, error) {
 	server := &Server{
 		tools:         make(map[string]registeredTool),
 		subscriptions: make(map[*subscription]struct{}),
+		tasks:         NewMemoryTaskRepository(nil),
 	}
 	for _, tool := range tools {
 		if err := server.RegisterTool(tool); err != nil {
@@ -245,6 +247,14 @@ func (s *Server) Handle(ctx context.Context, request protocol.Request) protocol.
 		}
 		response.Result = result
 	case "tools/call":
+		if taskResult, taskError, handled := s.callDeferredEchoTask(ctx, request.Params); handled {
+			if taskError != nil {
+				response.Error = taskError
+				return response
+			}
+			response.Result = taskResult
+			return response
+		}
 		result, err := s.callTool(ctx, request.Params)
 		if err != nil {
 			if protocolError, ok := err.(*protocol.Error); ok {
@@ -259,6 +269,27 @@ func (s *Server) Handle(ctx context.Context, request protocol.Request) protocol.
 		}
 		result.Meta = newResult().Meta
 		response.Result = mustMarshal(result)
+	case "tasks/get":
+		result, err := s.getTask(ctx, request.Params)
+		if err != nil {
+			response.Error = err
+			return response
+		}
+		response.Result = result
+	case "tasks/update":
+		result, err := s.updateTask(ctx, request.Params)
+		if err != nil {
+			response.Error = err
+			return response
+		}
+		response.Result = result
+	case "tasks/cancel":
+		result, err := s.cancelTask(ctx, request.Params)
+		if err != nil {
+			response.Error = err
+			return response
+		}
+		response.Result = result
 	default:
 		response.Error = protocol.NewError(protocol.CodeMethodNotFound, "method not found")
 	}

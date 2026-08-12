@@ -252,7 +252,7 @@ func (s *Server) serveStdio(ctx context.Context, input io.Reader, output io.Writ
 				}
 				continue
 			}
-			subscriber, acknowledged, err := s.subscribe(request.ID, request.Params)
+			subscriber, acknowledged, err := s.subscribe(ctx, request.ID, request.Params)
 			if err != nil {
 				releaseID(*request.ID)
 				response := protocol.Response{

@@ -66,8 +66,13 @@ request/response path, and only then adds network transport and streaming.
 
 - [x] [#18](https://github.com/shychee/mcp-from-scratch/issues/18) provides generic
   extension negotiation, including the capability foundation for MCP Apps.
-- [#19](https://github.com/shychee/mcp-from-scratch/issues/19) implements one
-  durable Tasks extension workflow.
+- [x] [#19](https://github.com/shychee/mcp-from-scratch/issues/19) implements one
+  bounded Tasks extension workflow: negotiated task creation, durable-before-
+  response `deferred_echo`, `tasks/get` polling, `tasks/update` approval,
+  owner/TTL checks, and task-filtered subscriptions. The default repository is
+  intentionally process-local memory behind a `TaskRepository` interface;
+  production deployments must replace it with shared durable storage and an
+  authenticated principal.
 - [#20](https://github.com/shychee/mcp-from-scratch/issues/20) makes the HTTP
   server an OAuth-protected resource server; it does not add an authorization
   server to this repository.
