@@ -73,11 +73,14 @@ request/response path, and only then adds network transport and streaming.
   intentionally process-local memory behind a `TaskRepository` interface;
   production deployments must replace it with shared durable storage and an
   authenticated principal.
-- [#20](https://github.com/shychee/mcp-from-scratch/issues/20) makes the HTTP
-  server an OAuth-protected resource server; it does not add an authorization
-  server to this repository.
-- [#21](https://github.com/shychee/mcp-from-scratch/issues/21) adds OAuth
-  discovery and PKCE to the HTTP host.
+- [x] [#20](https://github.com/shychee/mcp-from-scratch/issues/20) makes the HTTP
+  server an OAuth-protected resource server with injected bearer validation,
+  exact audience/issuer/expiry checks, and method/name scope policy; it does
+  not add an authorization server to this repository.
+- [x] [#21](https://github.com/shychee/mcp-from-scratch/issues/21) adds protected
+  resource and authorization-server discovery, S256 PKCE, state/issuer binding,
+  Client ID Metadata Documents, bounded DCR fallback, and one scope upgrade to
+  the HTTP host. Credentials stay in process-local memory.
 - [x] [#22](https://github.com/shychee/mcp-from-scratch/issues/22) adds progress and
   cancellation.
 - [x] [#23](https://github.com/shychee/mcp-from-scratch/issues/23) propagates trace
