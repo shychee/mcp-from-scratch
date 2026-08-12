@@ -90,6 +90,7 @@ type capabilities struct {
 	Tools      map[string]any      `json:"tools"`
 	Resources  map[string]any      `json:"resources,omitempty"`
 	Prompts    map[string]any      `json:"prompts,omitempty"`
+	Logging    map[string]any      `json:"logging"`
 	Extensions protocol.Extensions `json:"extensions,omitempty"`
 }
 
@@ -188,6 +189,7 @@ func (s *Server) Handle(ctx context.Context, request protocol.Request) protocol.
 		response.Error = requestError
 		return response
 	}
+	ctx = withObservabilityContext(ctx, request.Params)
 
 	switch request.Method {
 	case "server/discover":
@@ -203,6 +205,7 @@ func (s *Server) Handle(ctx context.Context, request protocol.Request) protocol.
 				Tools:      map[string]any{"listChanged": true},
 				Resources:  resources,
 				Prompts:    prompts,
+				Logging:    map[string]any{},
 				Extensions: s.extensionSnapshot(),
 			},
 		})
@@ -292,6 +295,20 @@ func validateRequestMetadata(raw json.RawMessage) *protocol.Error {
 				Requested: params.Meta.ProtocolVersion,
 			},
 		)
+	}
+	if params.Meta.LogLevel != "" {
+		if _, ok := logLevelRank(params.Meta.LogLevel); !ok {
+			return protocol.NewError(protocol.CodeInvalidParams, "invalid request log level")
+		}
+	}
+	var rawParams struct {
+		Meta struct {
+			ProgressToken json.RawMessage `json:"progressToken"`
+		} `json:"_meta"`
+	}
+	if json.Unmarshal(raw, &rawParams) == nil && len(rawParams.Meta.ProgressToken) != 0 &&
+		!validProgressToken(rawParams.Meta.ProgressToken) {
+		return protocol.NewError(protocol.CodeInvalidParams, "invalid progress token")
 	}
 	return nil
 }
