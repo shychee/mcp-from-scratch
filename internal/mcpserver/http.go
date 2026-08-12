@@ -94,6 +94,8 @@ func (s *Server) serveHTTP(writer http.ResponseWriter, request *http.Request) {
 			status = http.StatusBadRequest
 		case protocol.CodeMissingRequiredClientCapability:
 			status = http.StatusBadRequest
+		case protocol.CodeMissingRequiredTaskCapability:
+			status = http.StatusBadRequest
 		}
 	}
 	writeHTTPRPCResponse(writer, status, response)
@@ -182,7 +184,7 @@ func (s *Server) serveHTTPSubscription(writer http.ResponseWriter, request *http
 		return
 	}
 
-	subscriber, acknowledged, err := s.subscribe(rpcRequest.ID, rpcRequest.Params)
+	subscriber, acknowledged, err := s.subscribe(request.Context(), rpcRequest.ID, rpcRequest.Params)
 	if err != nil {
 		writeHTTPRPCResponse(writer, http.StatusOK, protocol.Response{
 			JSONRPC: "2.0",
@@ -249,8 +251,9 @@ func writeSSEMessage(writer http.ResponseWriter, value any) error {
 func validateHTTPHeaders(request *http.Request, rpcRequest protocol.Request) *protocol.Error {
 	var params struct {
 		protocol.RequestParams
-		Name string `json:"name"`
-		URI  string `json:"uri"`
+		Name   string `json:"name"`
+		URI    string `json:"uri"`
+		TaskID string `json:"taskId"`
 	}
 	if err := json.Unmarshal(rpcRequest.Params, &params); err != nil {
 		return protocol.NewError(protocol.CodeHeaderMismatch, "MCP transport header mismatch")
@@ -278,6 +281,9 @@ func validateHTTPHeaders(request *http.Request, rpcRequest protocol.Request) *pr
 		expectedName := params.Name
 		if rpcRequest.Method == "resources/read" {
 			expectedName = params.URI
+		}
+		if rpcRequest.Method == "tasks/get" || rpcRequest.Method == "tasks/update" || rpcRequest.Method == "tasks/cancel" {
+			expectedName = params.TaskID
 		}
 		if headerName := request.Header.Get(protocol.HeaderName); headerName == "" || headerName != expectedName {
 			return protocol.NewError(protocol.CodeHeaderMismatch, "MCP transport header mismatch")

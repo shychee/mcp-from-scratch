@@ -244,7 +244,7 @@ type Response struct {
 // MethodUsesNameHeader reports whether Streamable HTTP mirrors a name or URI.
 func MethodUsesNameHeader(method string) bool {
 	switch method {
-	case "tools/call", "resources/read", "prompts/get":
+	case "tools/call", "resources/read", "prompts/get", "tasks/get", "tasks/update", "tasks/cancel":
 		return true
 	default:
 		return false

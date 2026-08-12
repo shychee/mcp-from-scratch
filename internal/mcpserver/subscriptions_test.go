@@ -45,7 +45,7 @@ func TestHTTPSubscriptionAcknowledgesBeforeToolsListChanged(t *testing.T) {
 
 func TestSubscriptionDoesNotPublishUnrequestedNotificationTypes(t *testing.T) {
 	server := New()
-	subscription, acknowledged, err := server.subscribe(protocol.ID(42), json.RawMessage(`{
+	subscription, acknowledged, err := server.subscribe(context.Background(), protocol.ID(42), json.RawMessage(`{
 		"_meta": {
 			"io.modelcontextprotocol/protocolVersion": "2026-07-28",
 			"io.modelcontextprotocol/clientCapabilities": {}
@@ -76,14 +76,14 @@ func TestSubscriptionDoesNotPublishUnrequestedNotificationTypes(t *testing.T) {
 
 func TestSubscriptionPublishesOnlyRequestedCatalogChangeTypes(t *testing.T) {
 	server := New()
-	resourceSubscriber, resourceAck, err := server.subscribe(protocol.ID(46), modernRequestParamsWithNotifications(t, map[string]any{
+	resourceSubscriber, resourceAck, err := server.subscribe(context.Background(), protocol.ID(46), modernRequestParamsWithNotifications(t, map[string]any{
 		"resourcesListChanged": true,
 	}))
 	if err != nil {
 		t.Fatalf("subscribe(resources) error = %v", err)
 	}
 	defer server.unsubscribe(resourceSubscriber)
-	promptSubscriber, promptAck, err := server.subscribe(protocol.ID(47), modernRequestParamsWithNotifications(t, map[string]any{
+	promptSubscriber, promptAck, err := server.subscribe(context.Background(), protocol.ID(47), modernRequestParamsWithNotifications(t, map[string]any{
 		"promptsListChanged": true,
 	}))
 	if err != nil {
@@ -134,7 +134,7 @@ func TestSubscriptionPublishesOnlyRequestedCatalogChangeTypes(t *testing.T) {
 
 func TestSubscriptionPreservesUnsupportedProtocolVersionError(t *testing.T) {
 	server := New()
-	_, _, protocolError := server.subscribe(protocol.ID(45), json.RawMessage(`{
+	_, _, protocolError := server.subscribe(context.Background(), protocol.ID(45), json.RawMessage(`{
 		"_meta": {
 			"io.modelcontextprotocol/protocolVersion": "2099-01-01",
 			"io.modelcontextprotocol/clientCapabilities": {}
@@ -150,12 +150,12 @@ func TestSubscriptionPublishesOneTaggedEventPerConcurrentListener(t *testing.T) 
 	server := New()
 	params := modernRequestParamsWithNotifications(t, map[string]any{"toolsListChanged": true})
 
-	first, _, err := server.subscribe(protocol.ID(71), params)
+	first, _, err := server.subscribe(context.Background(), protocol.ID(71), params)
 	if err != nil {
 		t.Fatalf("subscribe first: %v", err)
 	}
 	defer server.unsubscribe(first)
-	second, _, err := server.subscribe(protocol.ID(72), params)
+	second, _, err := server.subscribe(context.Background(), protocol.ID(72), params)
 	if err != nil {
 		t.Fatalf("subscribe second: %v", err)
 	}
@@ -186,7 +186,7 @@ func TestSubscriptionPublishesOneTaggedEventPerConcurrentListener(t *testing.T) 
 
 func TestSubscriptionCoalescesChangesWithoutBlockingRegistry(t *testing.T) {
 	server := New()
-	subscriber, _, err := server.subscribe(protocol.ID(73), modernRequestParamsWithNotifications(t, map[string]any{
+	subscriber, _, err := server.subscribe(context.Background(), protocol.ID(73), modernRequestParamsWithNotifications(t, map[string]any{
 		"toolsListChanged": true,
 	}))
 	if err != nil {
@@ -225,7 +225,7 @@ func TestSubscriptionCoalescesChangesWithoutBlockingRegistry(t *testing.T) {
 
 func TestRequestTrafficDoesNotUseListenStream(t *testing.T) {
 	server := New()
-	subscriber, _, err := server.subscribe(protocol.ID(74), modernRequestParamsWithNotifications(t, map[string]any{
+	subscriber, _, err := server.subscribe(context.Background(), protocol.ID(74), modernRequestParamsWithNotifications(t, map[string]any{
 		"toolsListChanged": true,
 	}))
 	if err != nil {

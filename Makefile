@@ -1,4 +1,4 @@
-.PHONY: test demo demo-legacy demo-http demo-progress demo-subscriptions build
+.PHONY: test demo demo-legacy demo-http demo-progress demo-subscriptions demo-task build
 
 test:
 	go test ./...
@@ -18,6 +18,9 @@ demo-progress:
 demo-subscriptions:
 	go run ./cmd/mcp-subscription-demo
 
+demo-task:
+	go run ./cmd/mcp-task-demo
+
 build:
 	mkdir -p bin
 	go build -o bin/mcp-server ./cmd/mcp-server
@@ -26,3 +29,4 @@ build:
 	go build -o bin/mcp-http-demo ./cmd/mcp-http-demo
 	go build -o bin/mcp-progress-demo ./cmd/mcp-progress-demo
 	go build -o bin/mcp-subscription-demo ./cmd/mcp-subscription-demo
+	go build -o bin/mcp-task-demo ./cmd/mcp-task-demo
