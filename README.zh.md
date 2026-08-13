@@ -24,6 +24,7 @@ stdio 和无状态 Streamable HTTP 上的一个小型子集：
 - string 和 integer JSON-RPC request ID
 - request-scoped progress、协作式 cancellation、trace context 和日志
 - OAuth protected-resource metadata、Bearer 校验、发现、PKCE 和有界 scope upgrade
+- OpenAI-compatible 模型 adapter，执行一次 MCP tool call 并把结果回填给模型
 - JSON-RPC parse error、invalid request error、method-not-found error 和
   invalid-params error
 
@@ -39,8 +40,8 @@ stdio 和无状态 Streamable HTTP 上的一个小型子集：
 `elicitation/create` input request 演示 MRTR；host 原样带回 request state 和显式
 input response 后，server 才完成调用。同一个 dispatcher 现在也能通过无状态
 Streamable HTTP 使用；host 也可以在收到已确认的 `subscriptions/listen` 事件后刷新
-registry。Tasks、request observability 和 OAuth resource-server/host 流程已经建立在
-核心协议之上；模型集成和最终官方 peer 互操作验证是最后一组 roadmap 工作。
+registry。Tasks、request observability、OAuth resource-server/host 和真实模型流程已经
+建立在核心协议之上；最终官方 peer 互操作验证与 support matrix 是最后一组 roadmap 工作。
 
 迁移顺序、兼容边界和官方规范链接见
 [学习路线](docs/learning-roadmap.md)。
@@ -87,6 +88,11 @@ cmd/mcp-oauth-demo
   从本地 resource server 发布 protected-resource metadata
   发现本地 fake authorization server 并执行 S256 PKCE
   校验 token audience/scope 后重放一次受保护请求
+
+cmd/mcp-model-demo
+  把发现到的 MCP tool schema 发给 OpenAI-compatible endpoint
+  通过 MCP 执行模型返回的 function call，并把结果回填给模型
+  默认 demo 使用本地、无凭据的模型 fixture
 ```
 
 ## 运行 Demo
@@ -111,6 +117,9 @@ make demo-task
 
 # 无凭据运行本地 resource-server、discovery、PKCE 和 replay 流程。
 make demo-oauth
+
+# 使用本地模型 fixture 验证真实 OpenAI-compatible HTTP adapter。
+make demo-model
 ```
 
 demo 会打印每一次 request 和 response：
@@ -205,14 +214,15 @@ make test
   Client ID Metadata Documents、有界 DCR fallback、内存 token store 和一次 scope upgrade
 - `tools/list` 和 `tools/call` 由一个小型 server-side registry 驱动
 - 对 missing、unknown、malformed tool call arguments 做防御性校验
-- host-side tool discovery、fake model tool selection，以及 host/server
-  exchange transcript
+- host-side tool discovery 和 OpenAI-compatible Chat Completions tool schema
+- 一次有界 model tool-call、MCP 执行和 model result-feedback 回合
 
 Tasks 的 Memory repository 只保证单进程演示所需的生命周期语义，是明确的
 `TaskRepository` 生产边界，不等同于生产持久化。多实例部署必须提供共享存储，
 并从认证 principal 获取 owner，而不是把 `clientInfo.name` 当作真实身份。OAuth host
 同样只使用内存凭据和注入式 browser callback；生产持久化与 authorization server
-实现不在本项目范围。真实模型 adapter 仍属于独立 roadmap slice。
+实现不在本项目范围。模型 adapter 接受注入的 HTTPS endpoint、model name、HTTP client
+和可选 API key；默认 smoke 路径只使用本地 fixture。
 
 ## 当前 Tool
 
