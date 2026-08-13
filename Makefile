@@ -1,7 +1,24 @@
-.PHONY: test demo demo-legacy demo-http demo-progress demo-subscriptions demo-task demo-oauth demo-model build
+.PHONY: test interop smoke demo demo-legacy demo-http demo-progress demo-subscriptions demo-task demo-oauth demo-model build
 
 test:
 	go test ./...
+
+interop:
+	go test ./internal/interop -count=1
+
+smoke:
+	go test ./... -count=1
+	go vet ./...
+	$(MAKE) build
+	$(MAKE) demo
+	$(MAKE) demo-legacy
+	$(MAKE) demo-http
+	$(MAKE) demo-progress
+	$(MAKE) demo-subscriptions
+	$(MAKE) demo-task
+	$(MAKE) demo-oauth
+	$(MAKE) demo-model
+	$(MAKE) interop
 
 demo:
 	go run ./cmd/mcp-host
@@ -38,3 +55,4 @@ build:
 	go build -o bin/mcp-task-demo ./cmd/mcp-task-demo
 	go build -o bin/mcp-oauth-demo ./cmd/mcp-oauth-demo
 	go build -o bin/mcp-model-demo ./cmd/mcp-model-demo
+	go build -o bin/mcp-official-fixture ./cmd/mcp-official-fixture

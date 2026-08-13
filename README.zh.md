@@ -41,7 +41,8 @@ stdio 和无状态 Streamable HTTP 上的一个小型子集：
 input response 后，server 才完成调用。同一个 dispatcher 现在也能通过无状态
 Streamable HTTP 使用；host 也可以在收到已确认的 `subscriptions/listen` 事件后刷新
 registry。Tasks、request observability、OAuth resource-server/host 和真实模型流程已经
-建立在核心协议之上；最终官方 peer 互操作验证与 support matrix 是最后一组 roadmap 工作。
+建立在核心协议之上。官方 Go SDK `v1.7.0` peer 现在会通过 stdio 和 Streamable HTTP
+双向验证 host 与 server。精确边界见[支持矩阵](docs/support-matrix.zh.md)。
 
 迁移顺序、兼容边界和官方规范链接见
 [学习路线](docs/learning-roadmap.md)。
@@ -93,6 +94,9 @@ cmd/mcp-model-demo
   把发现到的 MCP tool schema 发给 OpenAI-compatible endpoint
   通过 MCP 执行模型返回的 function call，并把结果回填给模型
   默认 demo 使用本地、无凭据的模型 fixture
+
+cmd/mcp-official-fixture
+  运行官方 Go SDK v1.7.0 server，仅用于互操作验证
 ```
 
 ## 运行 Demo
@@ -120,6 +124,12 @@ make demo-oauth
 
 # 使用本地模型 fixture 验证真实 OpenAI-compatible HTTP adapter。
 make demo-model
+
+# 运行官方 Go SDK client/server 互操作验证。
+make interop
+
+# 构建全部二进制并运行所有无凭据本地与互操作 demo。
+make smoke
 ```
 
 demo 会打印每一次 request 和 response：
@@ -166,6 +176,8 @@ make test
 
 - `internal/mcpserver` 直接测试 server 的协议行为。
 - `internal/host` 验证真实 stdio 子进程和 HTTP/SSE 往返。
+- `internal/interop` 验证与固定版本官方 Go SDK 的双向 stdio/HTTP 行为，并覆盖
+  transport 负向矩阵。
 
 ## 当前实现了什么
 
