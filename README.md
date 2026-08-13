@@ -44,8 +44,9 @@ then completing when the host retries with the exact request state and explicit
 input response. The same dispatcher is available over stateless Streamable HTTP,
 and hosts can refresh their registry after an acknowledged
 `subscriptions/listen` event. Tasks, request observability, and the OAuth
-resource-server/host and real model flows now build on that core. Final
-official-peer interoperability and the support matrix remain the last roadmap slice.
+resource-server/host and real model flows now build on that core. Official Go
+SDK `v1.7.0` peers now verify both host and server over stdio and Streamable
+HTTP. See the [support matrix](docs/support-matrix.md) for exact boundaries.
 
 See [the learning roadmap](docs/learning-roadmap.md) for the ordered migration,
 compatibility boundaries, and links to the official specification.
@@ -99,6 +100,9 @@ cmd/mcp-model-demo
   sends discovered MCP tool schemas to an OpenAI-compatible endpoint
   executes the returned function call through MCP and feeds the result back
   uses a local credential-free model fixture for the default demo
+
+cmd/mcp-official-fixture
+  runs an official Go SDK v1.7.0 server used only for interoperability checks
 ```
 
 ## Run It
@@ -126,6 +130,12 @@ make demo-oauth
 
 # Exercise the real OpenAI-compatible HTTP adapter with a local model fixture.
 make demo-model
+
+# Run official Go SDK client/server interoperability checks.
+make interop
+
+# Build all binaries and run every credential-free local and interop demo.
+make smoke
 ```
 
 The demo prints each request and response:
@@ -172,6 +182,8 @@ The tests are intentionally split by learning boundary:
 
 - `internal/mcpserver` tests the server protocol behavior directly.
 - `internal/host` verifies real stdio subprocess and HTTP/SSE round trips.
+- `internal/interop` proves bidirectional stdio/HTTP behavior against the pinned
+  official Go SDK and covers the negative transport matrix.
 
 ## What This Implements
 

@@ -305,3 +305,22 @@ Why it matters:
 Function calling standardizes how the model asks for a tool. MCP standardizes
 how the host talks to the tool server. This is useful, but it can wait until the
 server-side protocol surface and interoperability matrix are more complete.
+
+## 13. Official Interoperability And Support Matrix [complete]
+
+Question: how do we prove this handwritten protocol implementation works with
+an independently maintained implementation?
+
+Implemented behavior:
+
+- pin official Go SDK `v1.7.0` as a test/fixture peer only
+- prove official client to this server over stdio and stateless Streamable HTTP
+- prove this host to an official server fixture over both transports
+- retain and exercise the legacy stdio fallback path
+- cover version, metadata, header, params, result-decoding, and HTTP status errors
+- publish matching English and Chinese capability matrices
+- provide `make smoke` for a clean, credential-free end-to-end gate
+
+Production protocol packages do not import the official SDK. Exact supported,
+partial, and unsupported boundaries are documented in
+[`docs/support-matrix.md`](support-matrix.md).
