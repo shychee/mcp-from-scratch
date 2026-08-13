@@ -24,6 +24,7 @@ subset of MCP `2026-07-28` over JSON-RPC, stdio, and stateless Streamable HTTP:
 - string and integer JSON-RPC request IDs
 - request-scoped progress, cooperative cancellation, trace context, and logs
 - OAuth protected-resource metadata, bearer validation, discovery, PKCE, and bounded scope upgrade
+- an OpenAI-compatible model adapter that executes one MCP tool call and feeds the result back
 - JSON-RPC parse errors, invalid request errors, method-not-found errors, and
   invalid-params errors
 
@@ -43,8 +44,8 @@ then completing when the host retries with the exact request state and explicit
 input response. The same dispatcher is available over stateless Streamable HTTP,
 and hosts can refresh their registry after an acknowledged
 `subscriptions/listen` event. Tasks, request observability, and the OAuth
-resource-server/host flow now build on that core; model integration and final
-official-peer interoperability remain the last roadmap slice.
+resource-server/host and real model flows now build on that core. Final
+official-peer interoperability and the support matrix remain the last roadmap slice.
 
 See [the learning roadmap](docs/learning-roadmap.md) for the ordered migration,
 compatibility boundaries, and links to the official specification.
@@ -93,6 +94,11 @@ cmd/mcp-oauth-demo
   publishes protected-resource metadata from a local resource server
   discovers a local fake authorization server and performs S256 PKCE
   validates the issued audience/scopes and replays one protected request
+
+cmd/mcp-model-demo
+  sends discovered MCP tool schemas to an OpenAI-compatible endpoint
+  executes the returned function call through MCP and feeds the result back
+  uses a local credential-free model fixture for the default demo
 ```
 
 ## Run It
@@ -117,6 +123,9 @@ make demo-task
 
 # Run a credential-free local resource-server, discovery, PKCE, and replay flow.
 make demo-oauth
+
+# Exercise the real OpenAI-compatible HTTP adapter with a local model fixture.
+make demo-model
 ```
 
 The demo prints each request and response:
@@ -215,8 +224,8 @@ This project currently implements a deliberately small JSON-RPC model:
   storage, and one scope upgrade
 - tool descriptions and calls backed by a small server-side registry
 - defensive validation for missing, unknown, and malformed tool call arguments
-- host-side tool discovery, fake model tool selection, and a transcript of
-  host/server exchanges
+- host-side tool discovery and OpenAI-compatible Chat Completions tool schemas
+- one bounded model tool-call turn, MCP execution, and model result-feedback turn
 
 The in-memory Tasks repository is deliberately process-local for this learning
 slice. It is a narrow `TaskRepository` boundary, not production durability;
@@ -224,7 +233,8 @@ multi-instance deployments must provide a shared store and derive owner identity
 from authenticated principals rather than `clientInfo.name`. The OAuth host
 also deliberately uses in-memory credentials and an injected browser callback;
 production persistence and authorization-server implementation are out of
-scope. A real model adapter remains a separate roadmap slice.
+scope. The model adapter accepts an injected HTTPS endpoint, model name, HTTP
+client, and optional API key; the default smoke path uses only the local fixture.
 
 ## Current Tool
 

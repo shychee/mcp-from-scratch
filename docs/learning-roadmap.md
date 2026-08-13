@@ -89,8 +89,9 @@ request/response path, and only then adds network transport and streaming.
 Resources and prompts remain planned protocol surfaces. Their list methods must
 follow the modern request metadata, complete/cacheable result, pagination, and
 subscription rules. They must not reintroduce an initialization lifecycle.
-The real model adapter remains after the protocol and interoperability work so
-model integration does not hide wire-level mistakes.
+The real model adapter now runs after the server protocol surfaces so model
+integration does not hide wire-level mistakes. Official-peer interoperability
+and the final support matrix remain separate.
 
 ## Completed Foundation Milestones
 
@@ -284,7 +285,7 @@ Why it matters:
 The server is not only method handlers. A usable modern MCP server also owns
 per-request version/capability validation and transport discipline.
 
-## 12. Real Model Adapter
+## 12. Real Model Adapter [complete]
 
 Question: how do model-native tool calls and MCP fit together?
 
@@ -294,6 +295,10 @@ Target behavior:
 - send a user prompt and tool list to a real model
 - convert the model tool call into MCP `tools/call`
 - feed the MCP result back into the model conversation
+
+Implemented with a provider-neutral `ModelAdapter`, one OpenAI-compatible Chat
+Completions HTTP adapter, and a credential-free local fixture that exercises the
+same production wire path. Streaming and multi-tool model turns remain out of scope.
 
 Why it matters:
 
